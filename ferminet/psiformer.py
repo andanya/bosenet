@@ -384,7 +384,8 @@ def make_fermi_net(
 
   if isinstance(jastrow, str):
     if jastrow.upper() == 'DEFAULT':
-      jastrow = jastrows.JastrowType.SIMPLE_EE
+      # jastrow = jastrows.JastrowType.SIMPLE_EE
+      jastrow = jastrows.JastrowType.NONE
     else:
       jastrow = jastrows.JastrowType[jastrow.upper()]
 
@@ -439,18 +440,25 @@ def make_fermi_net(
       of and log absolute value of the network evaluated at x.
     """
     orbitals = orbitals_apply(params, pos, spins, atoms, charges)
-    if options.states:
-      batch_logdet_matmul = jax.vmap(network_blocks.logdet_matmul, in_axes=0)
-      orbitals = [
-          jnp.reshape(orbital, (options.states, -1) + orbital.shape[1:])
-          for orbital in orbitals
-      ]
-      result = batch_logdet_matmul(orbitals)
-    else:
-      result = network_blocks.logdet_matmul(orbitals)
-    if 'state_scale' in params:
-      # only used at inference time for excited states
-      result = result[0], result[1] + params['state_scale']
+
+    # for bosons we don't need to antisymmetrize, we return the log of the product
+    # which is equivalent to the sum of logs
+
+    # if options.states:
+    #   batch_logdet_matmul = jax.vmap(network_blocks.logdet_matmul, in_axes=0)
+    #   orbitals = [
+    #       jnp.reshape(orbital, (options.states, -1) + orbital.shape[1:])
+    #       for orbital in orbitals
+    #   ]
+    #   result = batch_logdet_matmul(orbitals)
+    # else:
+    #   result = network_blocks.logdet_matmul(orbitals)
+    # if 'state_scale' in params:
+    #   # only used at inference time for excited states
+    #   result = result[0], result[1] + params['state_scale']
+
+    result = network_blocks.logproduct_matmul(orbitals)
+
     return result
 
   return networks.Network(

@@ -150,7 +150,7 @@ def logdet_matmul(
   """
   # 1x1 determinants appear to be numerically sensitive and can become 0
   # (especially when multiple determinants are used with the spin-factored
-  # wavefunction). Avoid this by not going into the log domain for 1x1 matrices.
+  # wavefunction). Avoid this by not going into the log domain for 1x1 matrices. # No log domain for 1x1 matrices (!)
   # Pass initial value to functools so det1d = 1 if all matrices are larger than
   # 1x1.
   det1d = functools.reduce(lambda a, b: a * b,
@@ -164,6 +164,74 @@ def logdet_matmul(
   # log-sum-exp trick
   maxlogdet = jnp.max(logdet)
   det = phase_in * det1d * jnp.exp(logdet - maxlogdet)
+  if w is None:
+    result = jnp.sum(det)
+  else:
+    result = jnp.matmul(det, w)[0]
+  # return phase as a unit-norm complex number, rather than as an angle   --- this is not what is done below
+  if result.dtype == jnp.complex64 or result.dtype == jnp.complex128:
+    phase_out = jnp.angle(result)  # result / jnp.abs(result)
+  else:
+    phase_out = jnp.sign(result)
+  log_out = jnp.log(jnp.abs(result)) + maxlogdet
+  return phase_out, log_out
+
+
+####
+# Adaptation for bosons
+####
+
+
+def slogproduct(x):
+  """Computes sign and log of product of orbitals.
+
+  Args:
+    x: an array.
+
+  Returns:
+    sign, (natural) logarithm of the product of x.
+  """
+  sign = jnp.prod(jnp.sign(x), axis=-1)
+  logproduct = jnp.sum(jnp.log(jnp.abs(x)), axis=-1)
+
+  return sign, logproduct
+
+
+def logproduct_matmul(
+    xs: Sequence[jnp.ndarray], w: Optional[jnp.ndarray] = None
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+  """Combines products and takes dot product with weights in log-domain.
+
+  We use the log-sum-exp trick to reduce numerical instabilities.
+
+  Args:
+    xs: BoseNet orbitals in each determinant. Either of length 1 with shape
+      (ndet, nelectron) (full_det=True) 
+    w: weight of each determinant. If none, a uniform weight is assumed.
+
+  Returns:
+    sum_i w_i P_i in the log domain, where w_i is the weight of P_i, the i-th
+    product
+  """
+
+  # 1x1 products appear to be numerically sensitive and can become 0
+  # (especially when multiple determinants are used with the spin-factored
+  # wavefunction). Avoid this by not going into the log domain for 1x1 matrices. # No log domain for 1x1 matrices (!)
+  # Pass initial value to functools so det1d = 1 if all matrices are larger than
+  # 1x1.
+  # det1d = functools.reduce(lambda a, b: a * b,
+  #                          [x.reshape(-1) for x in xs if x.shape[-1] == 1], 1)
+  # # Pass initial value to functools so sign_in = 1, logdet = 0 if all matrices
+  # # are 1x1.
+  phase_in, logdet = functools.reduce(
+      lambda a, b: (a[0] * b[0], a[1] + b[1]),
+      [slogproduct(x) for x in xs], (1, 0))
+      # [slogproduct(x) for x in xs if x.shape[-1] > 1], (1, 0))
+
+  # log-sum-exp trick
+  maxlogdet = jnp.max(logdet)
+  # det = phase_in * det1d * jnp.exp(logdet - maxlogdet)
+  det = phase_in * jnp.exp(logdet - maxlogdet)
   if w is None:
     result = jnp.sum(det)
   else:

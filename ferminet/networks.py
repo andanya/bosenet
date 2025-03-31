@@ -1063,6 +1063,13 @@ def make_fermi_net_layers(
 
 ## Network layers: orbitals ##
 
+# This function will be repurposed for making a bose network. We need just one "orbital" for the bosonic wavefunction:
+# because the following construction is to be used
+# phi(r_1; r_{/1}) * phi(r_2; r_{/2}) * ... * phi(r_N; r_{/N})
+# where r_{/i} is the position of all other particles except i.
+# This function will be explicitly symmetric because of the equivariance principle
+# No permanent construction is needed
+# Maybe we'll need more attention layers later.
 
 def make_orbitals(                                    # Important: Here the main construction is done, takes feature layers, other layers, evelopes (in options)
     nspins: Tuple[int, int],
@@ -1102,17 +1109,33 @@ def make_orbitals(                                    # Important: Here the main
 
     # How many spin-orbitals do we need to create per spin channel?
     nspin_orbitals = []
-    num_states = max(options.states, 1)
+    # for bosons, we need just one orbital per spin channel
+
+    # num_states = max(options.states, 1)
+    # for nspin in active_spin_channels:
+    #   if options.full_det:
+    #     # Dense determinant. Need N orbitals per electron per determinant.
+    #     norbitals = sum(nspins) * options.determinants * num_states
+    #   else:
+    #     # Spin-factored block-diagonal determinant. Need nspin orbitals per
+    #     # electron per determinant.
+    #     norbitals = nspin * options.determinants * num_states
+    #   if options.complex_output:
+    #     norbitals *= 2  # one output is real, one is imaginary       # For complex output, we need two orbitals per real orbital.
+    #   nspin_orbitals.append(norbitals)
+
+    # for now, no complex numbers, no states, always full_det
+
     for nspin in active_spin_channels:
       if options.full_det:
-        # Dense determinant. Need N orbitals per electron per determinant.
-        norbitals = sum(nspins) * options.determinants * num_states
+        # Dense determinant. Need just 1 orbital per all bosons per determinant.
+        # norbitals = sum(nspins) * options.determinants * num_states
+        norbitals = options.determinants
       else:
         # Spin-factored block-diagonal determinant. Need nspin orbitals per
         # electron per determinant.
-        norbitals = nspin * options.determinants * num_states
-      if options.complex_output:
-        norbitals *= 2  # one output is real, one is imaginary       # For complex output, we need two orbitals per real orbital.
+        # norbitals = nspin * options.determinants * num_states
+        raise NotImplementedError('spin-factored block-diagonal determinant')
       nspin_orbitals.append(norbitals)
 
     # create envelope params
@@ -1224,16 +1247,23 @@ def make_orbitals(                                    # Important: Here the main
         )
 
     # Reshape into matrices.
+
+    # Always options.full_det = True
+    # the last argument was the number of orbitals -- now we have just one
     shapes = [
-        (spin, -1, sum(nspins) if options.full_det else spin)
+        # (spin, -1, sum(nspins) if options.full_det else spin)
+        (spin, -1)
         for spin in active_spin_channels
     ]
     orbitals = [
         jnp.reshape(orbital, shape) for orbital, shape in zip(orbitals, shapes)
     ]
-    orbitals = [jnp.transpose(orbital, (1, 0, 2)) for orbital in orbitals]
+    # there is no 2nd axis anymore
+    # orbitals = [jnp.transpose(orbital, (1, 0, 2)) for orbital in orbitals]
+    orbitals = [jnp.transpose(orbital, (1, 0)) for orbital in orbitals]
     if options.full_det:
       orbitals = [jnp.concatenate(orbitals, axis=1)]
+    # at the end we have (-1, Nbosons) shape, where -1 is actually the number of determinants
 
     # Optionally apply Jastrow factor for electron cusp conditions.
     # Added pre-determinant for compatibility with pretraining.            # exp in jastrow is added here
@@ -1362,167 +1392,169 @@ def make_total_ansatz(signed_network: FermiNetLike,
 
 
 ## FermiNet ##
+# it is now in the file psiformer.py (!)
 
+# def make_fermi_net(
+#     nspins: Tuple[int, int],
+#     charges: jnp.ndarray,
+#     *,
+#     ndim: int = 3,
+#     determinants: int = 16,
+#     states: int = 0,
+#     envelope: Optional[envelopes.Envelope] = None,
+#     feature_layer: Optional[FeatureLayer] = None,
+#     jastrow: Union[str, jastrows.JastrowType] = jastrows.JastrowType.NONE,
+#     complex_output: bool = False,
+#     bias_orbitals: bool = False,
+#     full_det: bool = True,
+#     rescale_inputs: bool = False,
+#     # FermiNet-specific kwargs below.
+#     hidden_dims: FermiLayers = ((256, 32), (256, 32), (256, 32)),
+#     use_last_layer: bool = False,
+#     separate_spin_channels: bool = False,
+#     schnet_electron_electron_convolutions: Tuple[int, ...] = tuple(),
+#     electron_nuclear_aux_dims: Tuple[int, ...] = tuple(),
+#     nuclear_embedding_dim: int = 0,
+#     schnet_electron_nuclear_convolutions: Tuple[int, ...] = tuple(),
+# ) -> Network:
+#   """Creates functions for initializing parameters and evaluating ferminet.
 
-def make_fermi_net(
-    nspins: Tuple[int, int],
-    charges: jnp.ndarray,
-    *,
-    ndim: int = 3,
-    determinants: int = 16,
-    states: int = 0,
-    envelope: Optional[envelopes.Envelope] = None,
-    feature_layer: Optional[FeatureLayer] = None,
-    jastrow: Union[str, jastrows.JastrowType] = jastrows.JastrowType.NONE,
-    complex_output: bool = False,
-    bias_orbitals: bool = False,
-    full_det: bool = True,
-    rescale_inputs: bool = False,
-    # FermiNet-specific kwargs below.
-    hidden_dims: FermiLayers = ((256, 32), (256, 32), (256, 32)),
-    use_last_layer: bool = False,
-    separate_spin_channels: bool = False,
-    schnet_electron_electron_convolutions: Tuple[int, ...] = tuple(),
-    electron_nuclear_aux_dims: Tuple[int, ...] = tuple(),
-    nuclear_embedding_dim: int = 0,
-    schnet_electron_nuclear_convolutions: Tuple[int, ...] = tuple(),
-) -> Network:
-  """Creates functions for initializing parameters and evaluating ferminet.
+#   Args:
+#     nspins: Tuple of the number of spin-up and spin-down electrons.
+#     charges: (natom) array of atom nuclear charges.
+#     ndim: dimension of system. Change only with caution.
+#     determinants: Number of determinants to use.
+#     states: Number of outputs, one per excited (or ground) state. Ignored if 0.
+#     envelope: Envelope to use to impose orbitals go to zero at infinity.
+#     feature_layer: Input feature construction.
+#     jastrow: Type of Jastrow factor if used, or no jastrow if 'default'.
+#     complex_output: If true, the network outputs complex numbers.
+#     bias_orbitals: If true, include a bias in the final linear layer to shape
+#       the outputs into orbitals.
+#     full_det: If true, evaluate determinants over all electrons. Otherwise,
+#       block-diagonalise determinants into spin channels.
+#     rescale_inputs: If true, rescale the inputs so they grow as log(|r|).
+#     hidden_dims: Tuple of pairs, where each pair contains the number of hidden
+#       units in the one-electron and two-electron stream in the corresponding
+#       layer of the FermiNet. The number of layers is given by the length of the
+#       tuple.
+#     use_last_layer: If true, the outputs of the one- and two-electron streams
+#       are combined into permutation-equivariant features and passed into the
+#       final orbital-shaping layer. Otherwise, just the output of the
+#       one-electron stream is passed into the orbital-shaping layer.
+#     separate_spin_channels: Use separate learnable parameters for pairs of
+#       spin-parallel and spin-antiparallel electrons.
+#     schnet_electron_electron_convolutions: Dimension of embeddings used for
+#       electron-electron SchNet-style convolutions.
+#     electron_nuclear_aux_dims: hidden units in each layer of the
+#       electron-nuclear auxiliary stream. Used in electron-nuclear SchNet-style
+#       convolutions.
+#     nuclear_embedding_dim: Dimension of embedding used in for the nuclear
+#       features. Used in electron-nuclear SchNet-style convolutions.
+#     schnet_electron_nuclear_convolutions: Dimension of embeddings used for
+#       electron-nuclear SchNet-style convolutions.
 
-  Args:
-    nspins: Tuple of the number of spin-up and spin-down electrons.
-    charges: (natom) array of atom nuclear charges.
-    ndim: dimension of system. Change only with caution.
-    determinants: Number of determinants to use.
-    states: Number of outputs, one per excited (or ground) state. Ignored if 0.
-    envelope: Envelope to use to impose orbitals go to zero at infinity.
-    feature_layer: Input feature construction.
-    jastrow: Type of Jastrow factor if used, or no jastrow if 'default'.
-    complex_output: If true, the network outputs complex numbers.
-    bias_orbitals: If true, include a bias in the final linear layer to shape
-      the outputs into orbitals.
-    full_det: If true, evaluate determinants over all electrons. Otherwise,
-      block-diagonalise determinants into spin channels.
-    rescale_inputs: If true, rescale the inputs so they grow as log(|r|).
-    hidden_dims: Tuple of pairs, where each pair contains the number of hidden
-      units in the one-electron and two-electron stream in the corresponding
-      layer of the FermiNet. The number of layers is given by the length of the
-      tuple.
-    use_last_layer: If true, the outputs of the one- and two-electron streams
-      are combined into permutation-equivariant features and passed into the
-      final orbital-shaping layer. Otherwise, just the output of the
-      one-electron stream is passed into the orbital-shaping layer.
-    separate_spin_channels: Use separate learnable parameters for pairs of
-      spin-parallel and spin-antiparallel electrons.
-    schnet_electron_electron_convolutions: Dimension of embeddings used for
-      electron-electron SchNet-style convolutions.
-    electron_nuclear_aux_dims: hidden units in each layer of the
-      electron-nuclear auxiliary stream. Used in electron-nuclear SchNet-style
-      convolutions.
-    nuclear_embedding_dim: Dimension of embedding used in for the nuclear
-      features. Used in electron-nuclear SchNet-style convolutions.
-    schnet_electron_nuclear_convolutions: Dimension of embeddings used for
-      electron-nuclear SchNet-style convolutions.
+#   Returns:
+#     Network object containing init, apply, orbitals, options, where init and
+#     apply are callables which initialise the network parameters and apply the
+#     network respectively, orbitals is a callable which applies the network up to
+#     the orbitals, and options specifies the settings used in the network. If
+#     options.states > 1, the length of the vectors returned by apply are equal
+#     to the number of states.
+#   """
+#   if sum([nspin for nspin in nspins if nspin > 0]) == 0:
+#     raise ValueError('No electrons present!')
 
-  Returns:
-    Network object containing init, apply, orbitals, options, where init and
-    apply are callables which initialise the network parameters and apply the
-    network respectively, orbitals is a callable which applies the network up to
-    the orbitals, and options specifies the settings used in the network. If
-    options.states > 1, the length of the vectors returned by apply are equal
-    to the number of states.
-  """
-  if sum([nspin for nspin in nspins if nspin > 0]) == 0:
-    raise ValueError('No electrons present!')
+#   if not envelope:
+#     envelope = envelopes.make_isotropic_envelope()
 
-  if not envelope:
-    envelope = envelopes.make_isotropic_envelope()
+#   if not feature_layer:
+#     natoms = charges.shape[0]
+#     feature_layer = make_ferminet_features(
+#         natoms, nspins, ndim=ndim, rescale_inputs=rescale_inputs
+#     )
 
-  if not feature_layer:
-    natoms = charges.shape[0]
-    feature_layer = make_ferminet_features(
-        natoms, nspins, ndim=ndim, rescale_inputs=rescale_inputs
-    )
+#   if isinstance(jastrow, str):
+#     if jastrow.upper() == 'DEFAULT':
+#       jastrow = jastrows.JastrowType.NONE
+#     else:
+#       jastrow = jastrows.JastrowType[jastrow.upper()]
 
-  if isinstance(jastrow, str):
-    if jastrow.upper() == 'DEFAULT':
-      jastrow = jastrows.JastrowType.NONE
-    else:
-      jastrow = jastrows.JastrowType[jastrow.upper()]
+#   options = FermiNetOptions(
+#       ndim=ndim,
+#       determinants=determinants,
+#       states=states,
+#       rescale_inputs=rescale_inputs,
+#       envelope=envelope,
+#       feature_layer=feature_layer,
+#       jastrow=jastrow,
+#       complex_output=complex_output,
+#       bias_orbitals=bias_orbitals,
+#       full_det=full_det,
+#       hidden_dims=hidden_dims,
+#       separate_spin_channels=separate_spin_channels,
+#       schnet_electron_electron_convolutions=schnet_electron_electron_convolutions,
+#       electron_nuclear_aux_dims=electron_nuclear_aux_dims,
+#       nuclear_embedding_dim=nuclear_embedding_dim,
+#       schnet_electron_nuclear_convolutions=schnet_electron_nuclear_convolutions,
+#       use_last_layer=use_last_layer,
+#   )
 
-  options = FermiNetOptions(
-      ndim=ndim,
-      determinants=determinants,
-      states=states,
-      rescale_inputs=rescale_inputs,
-      envelope=envelope,
-      feature_layer=feature_layer,
-      jastrow=jastrow,
-      complex_output=complex_output,
-      bias_orbitals=bias_orbitals,
-      full_det=full_det,
-      hidden_dims=hidden_dims,
-      separate_spin_channels=separate_spin_channels,
-      schnet_electron_electron_convolutions=schnet_electron_electron_convolutions,
-      electron_nuclear_aux_dims=electron_nuclear_aux_dims,
-      nuclear_embedding_dim=nuclear_embedding_dim,
-      schnet_electron_nuclear_convolutions=schnet_electron_nuclear_convolutions,
-      use_last_layer=use_last_layer,
-  )
+#   if options.envelope.apply_type == envelopes.EnvelopeType.PRE_ORBITAL:
+#     if options.bias_orbitals:
+#       raise ValueError('Cannot bias orbitals w/STO envelope.')
 
-  if options.envelope.apply_type == envelopes.EnvelopeType.PRE_ORBITAL:
-    if options.bias_orbitals:
-      raise ValueError('Cannot bias orbitals w/STO envelope.')
+#   equivariant_layers = make_fermi_net_layers(nspins, charges.shape[0], options)
 
-  equivariant_layers = make_fermi_net_layers(nspins, charges.shape[0], options)
+#   orbitals_init, orbitals_apply = make_orbitals(  # here the neural net is assembled from feature_layer, equivariant_layers, envelopes (in options), etc.
+#       nspins=nspins,
+#       charges=charges,
+#       options=options,
+#       equivariant_layers=equivariant_layers,
+#   )
 
-  orbitals_init, orbitals_apply = make_orbitals(  # here the neural net is assembled from feature_layer, equivariant_layers, envelopes (in options), etc.
-      nspins=nspins,
-      charges=charges,
-      options=options,
-      equivariant_layers=equivariant_layers,
-  )
+#   def init(key: chex.PRNGKey) -> ParamTree:
+#     key, subkey = jax.random.split(key, num=2)
+#     return orbitals_init(subkey)
 
-  def init(key: chex.PRNGKey) -> ParamTree:
-    key, subkey = jax.random.split(key, num=2)
-    return orbitals_init(subkey)
+#   def apply(
+#       params,
+#       pos: jnp.ndarray,
+#       spins: jnp.ndarray,
+#       atoms: jnp.ndarray,
+#       charges: jnp.ndarray,
+#   ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+#     """Forward evaluation of the Fermionic Neural Network for a single datum.
 
-  def apply(
-      params,
-      pos: jnp.ndarray,
-      spins: jnp.ndarray,
-      atoms: jnp.ndarray,
-      charges: jnp.ndarray,
-  ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """Forward evaluation of the Fermionic Neural Network for a single datum.
+#     Args:
+#       params: network parameter tree.
+#       pos: The electron positions, a 3N dimensional vector.
+#       spins: The electron spins, an N dimensional vector.
+#       atoms: Array with positions of atoms.
+#       charges: Array with nuclear charges.
 
-    Args:
-      params: network parameter tree.
-      pos: The electron positions, a 3N dimensional vector.
-      spins: The electron spins, an N dimensional vector.
-      atoms: Array with positions of atoms.
-      charges: Array with nuclear charges.
+#     Returns:
+#       Output of antisymmetric neural network in log space, i.e. a tuple of sign
+#       of and log absolute of the network evaluated at x.
+#     """
 
-    Returns:
-      Output of antisymmetric neural network in log space, i.e. a tuple of sign
-      of and log absolute of the network evaluated at x.
-    """
+#     orbitals = orbitals_apply(params, pos, spins, atoms, charges)
 
-    orbitals = orbitals_apply(params, pos, spins, atoms, charges)
-    if options.states:
-      batch_logdet_matmul = jax.vmap(network_blocks.logdet_matmul, in_axes=0)
-      orbitals = [
-          jnp.reshape(orbital, (options.states, -1) + orbital.shape[1:])
-          for orbital in orbitals
-      ]
-      result = batch_logdet_matmul(orbitals)
-    else:
-      result = network_blocks.logdet_matmul(orbitals)
-    if 'state_scale' in params:
-      # only used at inference time for excited states
-      result = result[0], result[1] + params['state_scale']
-    return result
+#     if options.states:
+#       batch_logdet_matmul = jax.vmap(network_blocks.logdet_matmul, in_axes=0)
+#       orbitals = [
+#           jnp.reshape(orbital, (options.states, -1) + orbital.shape[1:])
+#           for orbital in orbitals
+#       ]
+#       result = batch_logdet_matmul(orbitals)
+#     else:
+#       result = network_blocks.logdet_matmul(orbitals)
+#     if 'state_scale' in params:
+#       # only used at inference time for excited states
+#       result = result[0], result[1] + params['state_scale']
 
-  return Network(
-      options=options, init=init, apply=apply, orbitals=orbitals_apply
-  )
+#     return result
+
+#   return Network(
+#       options=options, init=init, apply=apply, orbitals=orbitals_apply
+#   )
