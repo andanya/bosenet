@@ -191,8 +191,19 @@ def slogproduct(x):
   Returns:
     sign, (natural) logarithm of the product of x.
   """
+  # EPS = 1e-7
+  # EPS = 1e-20
+  # EPS = 1e-15
+
+  # EPS = 1e-20 -> didn't work well
+  EPS = 1e-7
+  # EPS = 0
+
   sign = jnp.prod(jnp.sign(x), axis=-1)
-  logproduct = jnp.sum(jnp.log(jnp.abs(x)), axis=-1)
+  logproduct = jnp.sum(jnp.log(jnp.maximum(jnp.abs(x), EPS)), axis=-1)
+
+  # if jnp.any(jnp.abs(x) < 3 * EPS):
+  #   print("Warning: some elements of x are very small")
 
   return sign, logproduct
 
