@@ -771,7 +771,10 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         states=cfg.system.get('states', 0),
         state_specific=(cfg.optim.objective == 'vmc_overlap'),
         pp_type=cfg.system.get('pp', {'type': 'ccecp'}).get('type'),
-        pp_symbols=pp_symbols if cfg.system.get('use_pp') else None)
+        pp_symbols=pp_symbols if cfg.system.get('use_pp') else None,
+        short_range_repulsion_strength=cfg.short_range_repulsion_strength,
+        barrier_sharpness=cfg.barrier_sharpness
+        )
 
   if cfg.optim.get('spin_energy', 0.0) > 0.0:            # + S^2 term if needed
     # Minimize <H + c * S^2> instead of just <H>

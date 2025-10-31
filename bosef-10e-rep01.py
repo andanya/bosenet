@@ -20,12 +20,12 @@ cfg.system.pyscf_mol = mol
 cfg.optim.iterations = 10000
 cfg.network.network_type = 'psiformer'
 # cfg.network.complex = True
-cfg.log.save_path = './bosef-10e-nonint'
+cfg.log.save_path = './bosef-10e-rep01'
 
 # cfg.update(system.pyscf_mol_to_internal_representation(cfg.system.pyscf_mol))
 # for atom in cfg.system.molecule:
 #     atom.coords = atom.coords[:2]
 
-cfg.short_range_repulsion_strength = 0.0
+cfg.short_range_repulsion_strength = 0.1
 
 train2DEG.train(cfg)

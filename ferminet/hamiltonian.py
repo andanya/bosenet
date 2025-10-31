@@ -263,7 +263,8 @@ def excited_kinetic_energy_matrix(
   return _lapl_over_f
 
 
-def potential_electron_electron(r_ee: Array) -> jnp.ndarray:
+def potential_electron_electron(r_ee: Array,
+        short_range_repulsion_strength) -> jnp.ndarray: # jnp.floating actually
   """Returns the electron-electron potential.
 
   Args:
@@ -272,10 +273,16 @@ def potential_electron_electron(r_ee: Array) -> jnp.ndarray:
       required.
   """
   r_ee = r_ee[jnp.triu_indices_from(r_ee[..., 0], 1)]
-  return (1.0 / r_ee / 5.).sum()                            # e-e with eps = 5
+  # return 0. * (1.0 / r_ee / 5.).sum()                            # e-e with eps = 5
+  RHO = 0.1
+  # now introduce short-range repulsion
+  if short_range_repulsion_strength:
+    return short_range_repulsion_strength * (jnp.exp(-1. * r_ee * r_ee / 2 / RHO / RHO) / (2 * jnp.pi * RHO * RHO)).sum()
+  else:
+    return 0. # * (1.0 / r_ee / 5.).sum()  
 
 
-def potential_electron_nuclear(charges: Array, r_ae: Array) -> jnp.ndarray:
+def potential_electron_nuclear(charges: Array, r_ae: Array, barrier_sharpness=1.) -> jnp.ndarray:
   """Returns the electron-nuclearpotential.
 
   Args:
@@ -284,12 +291,14 @@ def potential_electron_nuclear(charges: Array, r_ae: Array) -> jnp.ndarray:
       electron i and atom j.
   """
   DISK_RADIUS = 10.
-  RIM_WIDTH = 0.1
-  BARRIER_HEIGHT = 10.
+  RIM_WIDTH = 0.1 / barrier_sharpness #  0.1 / 2
+  BARRIER_HEIGHT = 10 * barrier_sharpness # 2 * 10
   # return 0. * (-jnp.sum(charges / r_ae[..., 0]))             # turning off e-a for now
   # returning a disk potential instead
-  return jnp.sum(BARRIER_HEIGHT * (1. + jnp.tanh((r_ae[..., 0, 0] - DISK_RADIUS) / RIM_WIDTH)) / 2.)
-
+  potential_energy = jnp.sum(BARRIER_HEIGHT * (1. + jnp.tanh((r_ae[..., 0, 0] - DISK_RADIUS) / RIM_WIDTH)) / 2.)
+  # if ~jnp.all(jnp.isfinite(potential_energy)):
+  #   raise ValueError('Potential energy is infinite.')
+  return potential_energy
 
 def potential_nuclear_nuclear(charges: Array, atoms: Array) -> jnp.ndarray:
   """Returns the electron-nuclearpotential.
@@ -304,7 +313,8 @@ def potential_nuclear_nuclear(charges: Array, atoms: Array) -> jnp.ndarray:
 
 
 def potential_energy(r_ae: Array, r_ee: Array, atoms: Array,
-                     charges: Array) -> jnp.ndarray:
+                     charges: Array, short_range_repulsion_strength,
+                     barrier_sharpness=1.) -> jnp.ndarray:
   """Returns the potential energy for this electron configuration.
 
   Args:
@@ -316,8 +326,8 @@ def potential_energy(r_ae: Array, r_ee: Array, atoms: Array,
     atoms: Shape (natoms, ndim). Positions of the atoms.
     charges: Shape (natoms). Nuclear charges of the atoms.
   """
-  return (potential_electron_electron(r_ee) +
-          potential_electron_nuclear(charges, r_ae) +
+  return (potential_electron_electron(r_ee, short_range_repulsion_strength=short_range_repulsion_strength) +
+          potential_electron_nuclear(charges, r_ae, barrier_sharpness=barrier_sharpness) +
           potential_nuclear_nuclear(charges, atoms))
 
 
@@ -325,6 +335,8 @@ def local_energy(
     f: networks.FermiNetLike,
     charges: jnp.ndarray,
     nspins: Sequence[int],
+    short_range_repulsion_strength,
+    barrier_sharpness=1.,
     use_scan: bool = False,
     complex_output: bool = False,
     laplacian_method: str = 'default',
@@ -449,7 +461,10 @@ def local_energy(
       ae, _, r_ae, r_ee = networks.construct_input_features(
           data.positions, data.atoms
       )
-      potential = (potential_energy(r_ae, r_ee, data.atoms, effective_charges) +
+      potential = (potential_energy(
+                      r_ae, r_ee, data.atoms, effective_charges,
+                      short_range_repulsion_strength=short_range_repulsion_strength,
+                      barrier_sharpness=barrier_sharpness) +
                    pp_local(r_ae) +
                    pp_nonlocal(key, f, params, data, ae, r_ae))
       kinetic = ke(params, data)
