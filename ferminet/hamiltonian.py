@@ -298,7 +298,7 @@ def potential_electron_nuclear(charges: Array, r_ae: Array, barrier_sharpness=1.
   potential_energy = jnp.sum(BARRIER_HEIGHT * (1. + jnp.tanh((r_ae[..., 0, 0] - DISK_RADIUS) / RIM_WIDTH)) / 2.)
   # if ~jnp.all(jnp.isfinite(potential_energy)):
   #   raise ValueError('Potential energy is infinite.')
-  return potential_energy
+  return 0 * potential_energy # no potential energy with pbc
 
 def potential_nuclear_nuclear(charges: Array, atoms: Array) -> jnp.ndarray:
   """Returns the electron-nuclearpotential.
