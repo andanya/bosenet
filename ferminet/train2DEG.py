@@ -797,6 +797,8 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         **cfg.system.make_local_energy_kwargs)
   else:
     pp_symbols = cfg.system.get('pp', {'symbols': None}).get('symbols')
+    # Extract lattice for periodic boundary conditions if present
+    pbc_lattice = cfg.network.get('make_feature_layer_kwargs', {}).get('lattice', None)
     local_energy_fn = hamiltonian.local_energy(   # HAMILTONIAN LOCAL ENERGY
         f=signed_network,
         charges=charges,
@@ -809,7 +811,8 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         pp_type=cfg.system.get('pp', {'type': 'ccecp'}).get('type'),
         pp_symbols=pp_symbols if cfg.system.get('use_pp') else None,
         short_range_repulsion_strength=cfg.short_range_repulsion_strength,
-        barrier_sharpness=cfg.barrier_sharpness
+        barrier_sharpness=cfg.barrier_sharpness,
+        lattice=pbc_lattice,
         )
 
   if cfg.optim.get('spin_energy', 0.0) > 0.0:            # + S^2 term if needed

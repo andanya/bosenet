@@ -19,6 +19,7 @@ from typing import Any, Callable, Optional, Sequence, Tuple, Union
 import chex
 from ferminet import networks
 from ferminet import pseudopotential as pp
+from ferminet.pbc.feature_layer import periodic_norm
 from ferminet.utils import utils
 import folx
 import jax
@@ -263,6 +264,28 @@ def excited_kinetic_energy_matrix(
   return _lapl_over_f
 
 
+def compute_periodic_r_ee(ee: Array, lattice: Array) -> jnp.ndarray:
+  """Computes periodic electron-electron distances using minimum image convention.
+
+  Args:
+    ee: Shape (nelectrons, nelectrons, ndim). Electron-electron displacement vectors.
+    lattice: Shape (ndim, ndim). Matrix of lattice vectors (columns are vectors).
+
+  Returns:
+    r_ee: Shape (nelectrons, nelectrons, 1). Periodic distances.
+  """
+  reciprocal_vecs = jnp.linalg.inv(lattice)
+  lattice_metric = lattice.T @ lattice
+  # Convert to fractional coordinates
+  scaled_ee = jnp.einsum('il,jkl->jki', reciprocal_vecs, ee)
+  # Compute periodic norm
+  n = ee.shape[0]
+  # Add identity to diagonal to avoid zero-norm issues, then mask out
+  scaled_ee_safe = scaled_ee + jnp.eye(n)[..., None]
+  r_ee = periodic_norm(lattice_metric, scaled_ee_safe) * (1.0 - jnp.eye(n))
+  return r_ee[..., None]
+
+
 def potential_electron_electron(r_ee: Array,
         short_range_repulsion_strength) -> jnp.ndarray: # jnp.floating actually
   """Returns the electron-electron potential.
@@ -344,6 +367,7 @@ def local_energy(
     state_specific: bool = False,
     pp_type: str = 'ccecp',
     pp_symbols: Sequence[str] | None = None,
+    lattice: Optional[jnp.ndarray] = None,
 ) -> LocalEnergy:
   """Creates the function to evaluate the local energy.
 
@@ -366,6 +390,9 @@ def local_energy(
       provided.
     pp_symbols: sequence of element symbols for which the pseudopotential is
       used.
+    lattice: Shape (ndim, ndim). Lattice vectors for periodic boundary conditions.
+      If provided, electron-electron distances are computed using minimum-image
+      convention. If None, standard Euclidean distances are used.
 
   Returns:
     Callable with signature e_l(params, key, data) which evaluates the local
@@ -458,9 +485,12 @@ def local_energy(
                                 use_scan=use_scan,
                                 complex_output=complex_output,
                                 laplacian_method=laplacian_method)
-      ae, _, r_ae, r_ee = networks.construct_input_features(
+      ae, ee, r_ae, r_ee = networks.construct_input_features(
           data.positions, data.atoms
       )
+      # Use periodic distances if lattice is provided
+      if lattice is not None:
+        r_ee = compute_periodic_r_ee(ee, lattice)
       potential = (potential_energy(
                       r_ae, r_ee, data.atoms, effective_charges,
                       short_range_repulsion_strength=short_range_repulsion_strength,
