@@ -367,17 +367,11 @@ def make_kfac_training_step(
 
 
 
-# helpers for saving walkers
 
-def _unshard_positions_to_host(pos_sharded) -> np.ndarray:
-  """(n_local_devices, device_batch, ncoords) -> (batch_total, ncoords) on host."""
-  arr = np.asarray(jax.device_get(pos_sharded))
-  return arr.reshape(-1, arr.shape[-1])
 
-def _atomic_save_npy(path: str, arr: np.ndarray):
-  tmp = path + ".tmp"
-  np.save(tmp, arr)
-  os.replace(tmp, path)  # atomic rename
+
+
+
 
 
 
@@ -598,15 +592,6 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
 
   ckpt_save_path = checkpoint.create_save_path(cfg.log.save_path)
   ckpt_restore_path = checkpoint.get_restore_path(cfg.log.restore_path)
-
-  # path for walkers
-  walkers_last_path = os.path.join(ckpt_save_path, "walkers_last.npy")
-  walkers_prev_path = os.path.join(ckpt_save_path, "walkers_prev.npy")
-  # Optional knobs (use defaults if not in cfg)
-  walkers_every = int(cfg.log.get('walkers_every', 1))         # save every iteration
-  density_bins  = int(cfg.log.get('density_bins', 128))        # 2D histogram bins
-  gather_hosts  = bool(cfg.log.get('walkers_gather_hosts', False))  # gather all hosts
-  save_density  = bool(cfg.log.get('save_density_from_walkers', False))
 
   ckpt_restore_filename = (
       checkpoint.find_last_checkpoint(ckpt_save_path) or
@@ -1000,17 +985,6 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
     # Main training loop              
     num_resets = 0  # used if reset_if_nan is true
     for t in range(t_init, cfg.optim.iterations):                     # MAIN TRAINING LOOP
-      save_walkers_now = (t % walkers_every == 0)
-
-      # PRE-STEP snapshot (so you can debug weird jumps)
-      if save_walkers_now:
-        prev_pos_host = _unshard_positions_to_host(data.positions)
-        if gather_hosts:
-          # Gather all hosts’ batches into a single array (optional, heavier).
-          prev_pos_host = np.concatenate(
-              jax.experimental.multihost_utils.process_allgather(prev_pos_host), axis=0
-          )
-
       sharded_key, subkeys = kfac_jax.utils.p_split(sharded_key)
       data, params, opt_state, loss, aux_data, pmove = step(
           data,
@@ -1018,36 +992,6 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
           opt_state,
           subkeys,
           mcmc_width)
-
-      if save_walkers_now:
-        cur_pos_host = _unshard_positions_to_host(data.positions)
-        if gather_hosts:
-          cur_pos_host = np.concatenate(
-              jax.experimental.multihost_utils.process_allgather(cur_pos_host), axis=0
-          )
-
-        # Only one writer if gathering; otherwise each host writes its own file.
-        if gather_hosts:
-          if jax.process_index() == 0:
-            _atomic_save_npy(walkers_prev_path, prev_pos_host)
-            _atomic_save_npy(walkers_last_path, cur_pos_host)
-        else:
-          # Per-host files; suffix by host id to avoid conflicts.
-          suffix = f".host{jax.process_index()}"
-          _atomic_save_npy(walkers_prev_path + suffix, prev_pos_host)
-          _atomic_save_npy(walkers_last_path + suffix,  cur_pos_host)
-
-        # Optional: quick density from walkers_last (especially handy for 2D)
-        if save_density and cfg.system.ndim == 2:
-          nelec = cur_pos_host.shape[-1] // 2
-          R = cur_pos_host.reshape(-1, nelec, 2)
-          xs, ys = R[..., 0].ravel(), R[..., 1].ravel()
-          H, xedges, yedges = np.histogram2d(xs, ys, bins=density_bins)
-          out = os.path.join(ckpt_save_path,
-                            ("density_last.npy" if gather_hosts
-                              else f"density_last.host{jax.process_index()}.npy"))
-          _atomic_save_npy(out, H)
-
 
       # due to pmean, loss, and pmove should be the same across
       # devices.
