@@ -182,7 +182,7 @@ def logdet_matmul(
 ####
 
 
-def slogproduct(x):
+def slogproduct(x, eps: float = 1e-7):
   """Computes sign and log of product of orbitals.
 
   Args:
@@ -191,16 +191,10 @@ def slogproduct(x):
   Returns:
     sign, (natural) logarithm of the product of x.
   """
-  # EPS = 1e-7
-  # EPS = 1e-20
-  # EPS = 1e-15
-
-  # EPS = 1e-20 -> didn't work well
-  EPS = 1e-7
-  # EPS = 0
 
   sign = jnp.prod(jnp.sign(x), axis=-1)
-  logproduct = jnp.sum(jnp.log(jnp.maximum(jnp.abs(x), EPS)), axis=-1)
+  # logproduct = jnp.sum(jnp.log(jnp.maximum(jnp.abs(x), EPS)), axis=-1)
+  logproduct = jnp.sum(jnp.log(jnp.abs(x) + eps), axis=-1)
 
   # if jnp.any(jnp.abs(x) < 3 * EPS):
   #   print("Warning: some elements of x are very small")
@@ -209,7 +203,9 @@ def slogproduct(x):
 
 
 def logproduct_matmul(
-    xs: Sequence[jnp.ndarray], w: Optional[jnp.ndarray] = None
+    xs: Sequence[jnp.ndarray],
+    w: Optional[jnp.ndarray] = None,
+    eps: float = 1e-7
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
   """Combines products and takes dot product with weights in log-domain.
 
@@ -236,7 +232,7 @@ def logproduct_matmul(
   # # are 1x1.
   phase_in, logdet = functools.reduce(
       lambda a, b: (a[0] * b[0], a[1] + b[1]),
-      [slogproduct(x) for x in xs], (1, 0))
+      [slogproduct(x, eps) for x in xs], (1, 0))
       # [slogproduct(x) for x in xs if x.shape[-1] > 1], (1, 0))
 
   # log-sum-exp trick

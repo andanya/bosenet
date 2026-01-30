@@ -50,6 +50,7 @@ def default() -> ml_collections.ConfigDict:
           'objective': 'vmc',
           'iterations': 50 * 1000,  # number of iterations
           'optimizer': 'kfac',  # one of adam, kfac, lamb, none
+          'log_eps0': 1e-7,  # initial log epsilon
           'laplacian': 'default',  # of of default or folx (for forward lapl)
           # If 0, use standard vmap. If >0, the max batch size for batched_vmap
           'max_vmap_batch_size': 0,

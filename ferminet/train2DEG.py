@@ -47,6 +47,14 @@ import optax
 from typing_extensions import Protocol
 
 
+def linear_eps(step: int, total_steps: int, start: float) -> float:
+  """Linearly decays from `start` at step 0 to 0 at `total_steps-1`."""
+  if total_steps <= 1:
+    return 0.0
+  frac = 1.0 - (step / float(total_steps - 1))
+  return start * jnp.clip(frac, 0.0, 1.0)
+
+  
 def _assign_spin_configuration(
     nalpha: int, nbeta: int, batch_size: int = 1
 ) -> jnp.ndarray:
@@ -974,6 +982,8 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
   time_of_last_ckpt = time.time()
   weighted_stats = None
 
+  eps0 = float(getattr(cfg.optim, "log_eps0"))
+
   if cfg.optim.optimizer == 'none' and opt_state_ckpt is not None:
     # If opt_state_ckpt is None, then we're restarting from a previous inference
     # run (most likely due to preemption) and so should continue from the last
@@ -1013,6 +1023,7 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
     # Main training loop              
     num_resets = 0  # used if reset_if_nan is true
     for t in range(t_init, cfg.optim.iterations):                     # MAIN TRAINING LOOP
+      eps_t = float(jnp.maximum(linear_eps(t, cfg.optim.iterations, eps0), 1e-38))
       save_walkers_now = (t % walkers_every == 0)
 
       # PRE-STEP snapshot (so you can debug weird jumps)
