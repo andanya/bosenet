@@ -11,7 +11,7 @@ import os
 
 
 # Torus dimension: L x L periodic box
-TORUS_LENGTH = np.sqrt(10 * np.pi)
+TORUS_LENGTH = 5.0
 N_PARTICLES = 10
 
 mol = gto.Mole()

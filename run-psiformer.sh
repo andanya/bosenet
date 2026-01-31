@@ -7,6 +7,8 @@
 #SBATCH --output=./andanya-psiformer-jobs/andanya-psiformer-job_%j.out
 #SBATCH --error=./andanya-psiformer-jobs/andanya-psiformer-job_%j.err
 
+module load CUDA
+module load cuDNN
 
 cd /home/da753/bosenet
 
