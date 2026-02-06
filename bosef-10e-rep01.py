@@ -31,5 +31,6 @@ cfg.log.save_path = './' + os.path.basename(__file__).removesuffix('.py')
 #     atom.coords = atom.coords[:2]
 
 cfg.short_range_repulsion_strength = 0.1
+cfg.disk_radius = 10.
 
 train2DEG.train(cfg)

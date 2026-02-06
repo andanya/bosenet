@@ -282,7 +282,7 @@ def potential_electron_electron(r_ee: Array,
     return 0. # * (1.0 / r_ee / 5.).sum()  
 
 
-def potential_electron_nuclear(charges: Array, r_ae: Array, barrier_sharpness=1.) -> jnp.ndarray:
+def potential_electron_nuclear(charges: Array, r_ae: Array, barrier_sharpness=1., disk_radius=10.) -> jnp.ndarray:
   """Returns the electron-nuclearpotential.
 
   Args:
@@ -290,12 +290,11 @@ def potential_electron_nuclear(charges: Array, r_ae: Array, barrier_sharpness=1.
     r_ae: Shape (nelectrons, natoms). r_ae[i, j] gives the distance between
       electron i and atom j.
   """
-  DISK_RADIUS = 10.
   RIM_WIDTH = 0.1 / barrier_sharpness #  0.1 / 2
   BARRIER_HEIGHT = 10 * barrier_sharpness # 2 * 10
   # return 0. * (-jnp.sum(charges / r_ae[..., 0]))             # turning off e-a for now
   # returning a disk potential instead
-  potential_energy = jnp.sum(BARRIER_HEIGHT * (1. + jnp.tanh((r_ae[..., 0, 0] - DISK_RADIUS) / RIM_WIDTH)) / 2.)
+  potential_energy = jnp.sum(BARRIER_HEIGHT * (1. + jnp.tanh((r_ae[..., 0, 0] - disk_radius) / RIM_WIDTH)) / 2.)
   # if ~jnp.all(jnp.isfinite(potential_energy)):
   #   raise ValueError('Potential energy is infinite.')
   return potential_energy
@@ -314,7 +313,7 @@ def potential_nuclear_nuclear(charges: Array, atoms: Array) -> jnp.ndarray:
 
 def potential_energy(r_ae: Array, r_ee: Array, atoms: Array,
                      charges: Array, short_range_repulsion_strength,
-                     barrier_sharpness=1.) -> jnp.ndarray:
+                     barrier_sharpness=1., disk_radius=10.) -> jnp.ndarray:
   """Returns the potential energy for this electron configuration.
 
   Args:
@@ -327,7 +326,7 @@ def potential_energy(r_ae: Array, r_ee: Array, atoms: Array,
     charges: Shape (natoms). Nuclear charges of the atoms.
   """
   return (potential_electron_electron(r_ee, short_range_repulsion_strength=short_range_repulsion_strength) +
-          potential_electron_nuclear(charges, r_ae, barrier_sharpness=barrier_sharpness) +
+          potential_electron_nuclear(charges, r_ae, barrier_sharpness=barrier_sharpness, disk_radius=disk_radius) +
           potential_nuclear_nuclear(charges, atoms))
 
 
@@ -337,6 +336,7 @@ def local_energy(
     nspins: Sequence[int],
     short_range_repulsion_strength,
     barrier_sharpness=1.,
+    disk_radius=10.,
     use_scan: bool = False,
     complex_output: bool = False,
     laplacian_method: str = 'default',
@@ -464,7 +464,8 @@ def local_energy(
       potential = (potential_energy(
                       r_ae, r_ee, data.atoms, effective_charges,
                       short_range_repulsion_strength=short_range_repulsion_strength,
-                      barrier_sharpness=barrier_sharpness) +
+                      barrier_sharpness=barrier_sharpness,
+                      disk_radius=disk_radius) +
                    pp_local(r_ae) +
                    pp_nonlocal(key, f, params, data, ae, r_ae))
       kinetic = ke(params, data)

@@ -35,6 +35,7 @@ def default() -> ml_collections.ConfigDict:
       'batch_size': 4096,  # batch size,
       'short_range_repulsion_strength': 0.0,
       'barrier_sharpness': 1.,
+      'disk_radius': 10.,
       # Config module used. Should be set in get_config function as either the
       # absolute module or relative to the configs subdirectory. Relative
       # imports must start with a '.' (e.g. .atom). Do *not* override on
