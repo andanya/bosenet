@@ -192,9 +192,11 @@ def slogproduct(x, eps: float = 1e-7):
     sign, (natural) logarithm of the product of x.
   """
 
-  sign = jnp.prod(jnp.sign(x), axis=-1)
-  # logproduct = jnp.sum(jnp.log(jnp.maximum(jnp.abs(x), EPS)), axis=-1)
-  logproduct = jnp.sum(jnp.log(jnp.abs(x) + eps), axis=-1)
+  # # sign = jnp.prod(jnp.sign(x), axis=-1)
+  # # logproduct = jnp.sum(jnp.log(jnp.abs(x) + eps), axis=-1)
+
+  sign = 1
+  logproduct = jnp.sum(x, axis=-1) # let's treat the outputs of the neural net as logs, not just values
 
   # if jnp.any(jnp.abs(x) < 3 * EPS):
   #   print("Warning: some elements of x are very small")
