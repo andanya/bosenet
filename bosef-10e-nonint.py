@@ -26,6 +26,6 @@ cfg.log.save_path = './bosef-10e-nonint'
 # for atom in cfg.system.molecule:
 #     atom.coords = atom.coords[:2]
 
-cfg.short_range_repulsion_strength = 0.0
+cfg.interaction_strength = 0.0
 
 train2DEG.train(cfg)

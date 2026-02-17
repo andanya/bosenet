@@ -810,7 +810,8 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         state_specific=(cfg.optim.objective == 'vmc_overlap'),
         pp_type=cfg.system.get('pp', {'type': 'ccecp'}).get('type'),
         pp_symbols=pp_symbols if cfg.system.get('use_pp') else None,
-        short_range_repulsion_strength=cfg.short_range_repulsion_strength,
+        interaction_strength=cfg.interaction_strength,
+        interaction_truncation_limit=cfg.interaction_truncation_limit,
         barrier_sharpness=cfg.barrier_sharpness,
         lattice=pbc_lattice,
         )

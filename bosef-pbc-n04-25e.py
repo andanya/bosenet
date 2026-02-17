@@ -67,6 +67,6 @@ cfg.log.save_path = './' + os.path.basename(__file__).removesuffix('.py')
 # for atom in cfg.system.molecule:
 #     atom.coords = atom.coords[:2]
 
-cfg.short_range_repulsion_strength = 0.1
+cfg.interaction_strength = 0.1
 
 train2DEG.train(cfg)

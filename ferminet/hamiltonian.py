@@ -14,6 +14,8 @@
 
 """Evaluating the Hamiltonian on a wavefunction."""
 
+import itertools
+
 from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
 import chex
@@ -286,23 +288,44 @@ def compute_periodic_r_ee(ee: Array, lattice: Array) -> jnp.ndarray:
   return r_ee[..., None]
 
 
-def potential_electron_electron(r_ee: Array,
-        short_range_repulsion_strength) -> jnp.ndarray: # jnp.floating actually
-  """Returns the electron-electron potential.
+def potential_electron_electron(
+    ee: Array,
+    r_ee: Array,
+    interaction_strength: float,
+    lattice: Optional[Array] = None,
+    interaction_truncation_limit: int = 5,
+) -> jnp.ndarray:
+  """Returns the electron-electron repulsion potential.
 
   Args:
+    ee: Shape (nelectrons, nelectrons, ndim). Electron-electron displacements.
     r_ee: Shape (neletrons, nelectrons, :). r_ee[i,j,0] gives the distance
-      between electrons i and j. Other elements in the final axes are not
-      required.
+      between electrons i and j under minimum-image convention.
+    interaction_strength: Prefactor ``k`` in the k / r^3 pair potential.
+    lattice: Shape (ndim, ndim). Lattice vectors for periodic cell.
+    interaction_truncation_limit: Number of unit-cell images included in each
+      positive/negative lattice-vector direction for the real-space summation.
   """
-  r_ee = r_ee[jnp.triu_indices_from(r_ee[..., 0], 1)]
-  # return 0. * (1.0 / r_ee / 5.).sum()                            # e-e with eps = 5
-  RHO = 0.1
-  # now introduce short-range repulsion
-  if short_range_repulsion_strength:
-    return short_range_repulsion_strength * (jnp.exp(-1. * r_ee * r_ee / 2 / RHO / RHO) / (2 * jnp.pi * RHO * RHO)).sum()
-  else:
-    return 0. # * (1.0 / r_ee / 5.).sum()  
+  if interaction_strength == 0.0:
+    return 0.0
+
+  n = ee.shape[0]
+  if lattice is None:
+    r_pairs = r_ee[jnp.triu_indices_from(r_ee[..., 0], 1)]
+    return interaction_strength * jnp.sum(1.0 / (r_pairs ** 3))
+
+  dim = ee.shape[-1]
+  ordinals = jnp.arange(-interaction_truncation_limit,
+                        interaction_truncation_limit + 1)
+  image_indices = jnp.array(list(itertools.product(ordinals, repeat=dim)))
+  # R = A n with lattice vectors as columns in A.
+  image_shifts = jnp.einsum('ij,nj->ni', lattice, image_indices)
+
+  pair_mask = jnp.triu(jnp.ones((n, n), dtype=bool), k=1)
+  pair_displacements = ee[pair_mask]
+  all_displacements = pair_displacements[:, None, :] + image_shifts[None, :, :]
+  distances = jnp.linalg.norm(all_displacements, axis=-1)
+  return interaction_strength * jnp.sum(1.0 / (distances ** 3))
 
 
 def potential_electron_nuclear(charges: Array, r_ae: Array, barrier_sharpness=1.) -> jnp.ndarray:
@@ -335,9 +358,17 @@ def potential_nuclear_nuclear(charges: Array, atoms: Array) -> jnp.ndarray:
       jnp.triu((charges[None, ...] * charges[..., None]) / r_aa, k=1))    # turning off a-a for now
 
 
-def potential_energy(r_ae: Array, r_ee: Array, atoms: Array,
-                     charges: Array, short_range_repulsion_strength,
-                     barrier_sharpness=1.) -> jnp.ndarray:
+def potential_energy(
+    r_ae: Array,
+    ee: Array,
+    r_ee: Array,
+    atoms: Array,
+    charges: Array,
+    interaction_strength: float,
+    barrier_sharpness: float = 1.,
+    lattice: Optional[Array] = None,
+    interaction_truncation_limit: int = 5,
+) -> jnp.ndarray:
   """Returns the potential energy for this electron configuration.
 
   Args:
@@ -349,7 +380,12 @@ def potential_energy(r_ae: Array, r_ee: Array, atoms: Array,
     atoms: Shape (natoms, ndim). Positions of the atoms.
     charges: Shape (natoms). Nuclear charges of the atoms.
   """
-  return (potential_electron_electron(r_ee, short_range_repulsion_strength=short_range_repulsion_strength) +
+  return (potential_electron_electron(
+              ee,
+              r_ee,
+              interaction_strength=interaction_strength,
+              lattice=lattice,
+              interaction_truncation_limit=interaction_truncation_limit) +
           potential_electron_nuclear(charges, r_ae, barrier_sharpness=barrier_sharpness) +
           potential_nuclear_nuclear(charges, atoms))
 
@@ -358,7 +394,8 @@ def local_energy(
     f: networks.FermiNetLike,
     charges: jnp.ndarray,
     nspins: Sequence[int],
-    short_range_repulsion_strength,
+    interaction_strength: float,
+    interaction_truncation_limit: int = 5,
     barrier_sharpness=1.,
     use_scan: bool = False,
     complex_output: bool = False,
@@ -432,12 +469,20 @@ def local_energy(
       # Compute features
       vmap_features = jax.vmap(networks.construct_input_features, (0, None))
       positions = jnp.reshape(data.positions, [states, -1])
-      ae, _, r_ae, r_ee = vmap_features(positions, data.atoms)
+      ae, ee, r_ae, r_ee = vmap_features(positions, data.atoms)
 
       # Compute potential energy
-      vmap_pot = jax.vmap(potential_energy, (0, 0, None, None))
+      vmap_pot = jax.vmap(potential_energy, (0, 0, 0, None, None, None, None, None, None))
       pot_spectrum = vmap_pot(
-          r_ae, r_ee, data.atoms, effective_charges)[:, None]
+          r_ae,
+          ee,
+          r_ee,
+          data.atoms,
+          effective_charges,
+          interaction_strength,
+          barrier_sharpness,
+          lattice,
+          interaction_truncation_limit)[:, None]
 
       if use_pp:
         data_vmap_dims = networks.FermiNetData(
@@ -492,9 +537,15 @@ def local_energy(
       if lattice is not None:
         r_ee = compute_periodic_r_ee(ee, lattice)
       potential = (potential_energy(
-                      r_ae, r_ee, data.atoms, effective_charges,
-                      short_range_repulsion_strength=short_range_repulsion_strength,
-                      barrier_sharpness=barrier_sharpness) +
+                      r_ae,
+                      ee,
+                      r_ee,
+                      data.atoms,
+                      effective_charges,
+                      interaction_strength=interaction_strength,
+                      barrier_sharpness=barrier_sharpness,
+                      lattice=lattice,
+                      interaction_truncation_limit=interaction_truncation_limit) +
                    pp_local(r_ae) +
                    pp_nonlocal(key, f, params, data, ae, r_ae))
       kinetic = ke(params, data)
