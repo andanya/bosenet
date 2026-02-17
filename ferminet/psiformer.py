@@ -123,13 +123,9 @@ def make_multi_head_attention(num_heads: int, heads_dim: int) ->...:
     k = linear_projection(key, params['k_w'])
     v = linear_projection(value, params['v_w'])
 
-    attn_logits = jnp.einsum('...thd,...Thd->...htT', q, k)
-    scale = 1. / np.sqrt(heads_dim)
-    attn_logits *= scale
-
-    attn_weights = jax.nn.softmax(attn_logits)
-
-    attn = jnp.einsum('...htT,...Thd->...thd', attn_weights, v)
+    # Scaled dot-product attention. The operation applies 1/√d_k automatically.
+    # This jax function implements GPU-optimized Flash attention automatically.
+    attn = jax.nn.dot_product_attention(q, k, v)
 
     # Concatenate attention matrix of all heads into a single vector.
     # Shape [..., q_index_dim, num_heads * heads_dim]
