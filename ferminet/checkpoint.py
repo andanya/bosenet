@@ -124,6 +124,9 @@ def save(save_path: str,
         mcmc_width=mcmc_width,
         density_state=(dataclasses.asdict(density_state)
                        if density_state else None))
+  for old_file in os.listdir(save_path):
+    if 'qmcjax_ckpt_' in old_file and old_file != os.path.basename(ckpt_filename):
+      os.remove(os.path.join(save_path, old_file))
   return ckpt_filename
 
 
