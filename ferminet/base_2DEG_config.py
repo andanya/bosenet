@@ -56,8 +56,8 @@ def default() -> ml_collections.ConfigDict:
           'max_vmap_batch_size': 0,
           'lr': {
               'rate': 0.05,  # learning rate
-              'decay': 1.0,  # exponent of learning rate decay
-              'delay': 10000.0,  # term that sets the scale of the rate decay
+              'decay': 1.5,  # exponent of learning rate decay
+              'delay': 5000.0,  # term that sets the scale of the rate decay
           },
           # If greater than zero, scale (at which to clip local energy) in units
           # of the mean deviation from the mean.
@@ -187,8 +187,8 @@ def default() -> ml_collections.ConfigDict:
           # Note: HMC options are not currently used.
           # Number of burn in steps after pretraining.  If zero do not burn in
           # or reinitialize walkers.
-          'burn_in': 100,
-          'steps': 10,  # Number of MCMC steps to make between network updates.
+          'burn_in': 300,
+          'steps': 30,  # Number of MCMC steps to make between network updates.
           # Width of (atom-centred) Gaussian used to generate initial electron
           # configurations.
           'init_width': 1.0,
