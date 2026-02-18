@@ -321,8 +321,8 @@ def potential_electron_electron(
   # R = A n with lattice vectors as columns in A.
   image_shifts = jnp.einsum('ij,nj->ni', lattice, image_indices)
 
-  pair_mask = jnp.triu(jnp.ones((n, n), dtype=bool), k=1)
-  pair_displacements = ee[pair_mask]
+  idx_i, idx_j = jnp.triu_indices(n, k=1)
+  pair_displacements = ee[idx_i, idx_j]
   all_displacements = pair_displacements[:, None, :] + image_shifts[None, :, :]
   distances = jnp.linalg.norm(all_displacements, axis=-1)
   return interaction_strength * jnp.sum(1.0 / (distances ** 3))
