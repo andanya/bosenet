@@ -292,6 +292,7 @@ def potential_electron_electron(
     ee: Array,
     r_ee: Array,
     interaction_strength: float,
+    interaction_small_length_cutoff: float = 0.1,
     lattice: Optional[Array] = None,
     interaction_truncation_limit: int = 5,
 ) -> jnp.ndarray:
@@ -301,7 +302,9 @@ def potential_electron_electron(
     ee: Shape (nelectrons, nelectrons, ndim). Electron-electron displacements.
     r_ee: Shape (neletrons, nelectrons, :). r_ee[i,j,0] gives the distance
       between electrons i and j under minimum-image convention.
-    interaction_strength: Prefactor ``k`` in the k / r^3 pair potential.
+    interaction_strength: Prefactor ``k`` in the k / (r + r0)^3 pair potential.
+    interaction_small_length_cutoff: Softening length r0 that regularises the
+      1/r^3 singularity at short range.
     lattice: Shape (ndim, ndim). Lattice vectors for periodic cell.
     interaction_truncation_limit: Number of unit-cell images included in each
       positive/negative lattice-vector direction for the real-space summation.
@@ -309,10 +312,11 @@ def potential_electron_electron(
   if interaction_strength == 0.0:
     return 0.0
 
+  r0 = interaction_small_length_cutoff
   n = ee.shape[0]
   if lattice is None:
     r_pairs = r_ee[jnp.triu_indices_from(r_ee[..., 0], 1)]
-    return interaction_strength * jnp.sum(1.0 / (r_pairs ** 3))
+    return interaction_strength * jnp.sum(1.0 / (r_pairs + r0) ** 3)
 
   dim = ee.shape[-1]
   ordinals = jnp.arange(-interaction_truncation_limit,
@@ -325,7 +329,7 @@ def potential_electron_electron(
   pair_displacements = ee[idx_i, idx_j]
   all_displacements = pair_displacements[:, None, :] + image_shifts[None, :, :]
   distances = jnp.linalg.norm(all_displacements, axis=-1)
-  return interaction_strength * jnp.sum(1.0 / (distances ** 3))
+  return interaction_strength * jnp.sum(1.0 / (distances + r0) ** 3)
 
 
 def potential_electron_nuclear(charges: Array, r_ae: Array, barrier_sharpness=1.) -> jnp.ndarray:
@@ -365,6 +369,7 @@ def potential_energy(
     atoms: Array,
     charges: Array,
     interaction_strength: float,
+    interaction_small_length_cutoff: float = 0.1,
     barrier_sharpness: float = 1.,
     lattice: Optional[Array] = None,
     interaction_truncation_limit: int = 5,
@@ -384,6 +389,7 @@ def potential_energy(
               ee,
               r_ee,
               interaction_strength=interaction_strength,
+              interaction_small_length_cutoff=interaction_small_length_cutoff,
               lattice=lattice,
               interaction_truncation_limit=interaction_truncation_limit) +
           potential_electron_nuclear(charges, r_ae, barrier_sharpness=barrier_sharpness) +
@@ -395,6 +401,7 @@ def local_energy(
     charges: jnp.ndarray,
     nspins: Sequence[int],
     interaction_strength: float,
+    interaction_small_length_cutoff: float = 0.1,
     interaction_truncation_limit: int = 5,
     barrier_sharpness=1.,
     use_scan: bool = False,
@@ -543,6 +550,7 @@ def local_energy(
                       data.atoms,
                       effective_charges,
                       interaction_strength=interaction_strength,
+                      interaction_small_length_cutoff=interaction_small_length_cutoff,
                       barrier_sharpness=barrier_sharpness,
                       lattice=lattice,
                       interaction_truncation_limit=interaction_truncation_limit) +

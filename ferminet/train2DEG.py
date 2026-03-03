@@ -811,6 +811,7 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         pp_type=cfg.system.get('pp', {'type': 'ccecp'}).get('type'),
         pp_symbols=pp_symbols if cfg.system.get('use_pp') else None,
         interaction_strength=cfg.interaction_strength,
+        interaction_small_length_cutoff=cfg.interaction_small_length_cutoff,
         interaction_truncation_limit=cfg.interaction_truncation_limit,
         barrier_sharpness=cfg.barrier_sharpness,
         lattice=pbc_lattice,
