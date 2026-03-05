@@ -327,6 +327,11 @@ def potential_electron_electron(
 
   idx_i, idx_j = jnp.triu_indices(n, k=1)
   pair_displacements = ee[idx_i, idx_j]
+  # Wrap pair displacements to the minimum-image cell so the lattice sum is
+  # correct even when MCMC walkers have drifted many unit cells away from [0,L).
+  reciprocal = jnp.linalg.inv(lattice)
+  frac = jnp.einsum('ij,pj->pi', reciprocal, pair_displacements)
+  pair_displacements = jnp.einsum('ij,pj->pi', lattice, frac - jnp.round(frac))
   all_displacements = pair_displacements[:, None, :] + image_shifts[None, :, :]
   distances = jnp.linalg.norm(all_displacements, axis=-1)
   return interaction_strength * jnp.sum(1.0 / (distances + r0) ** 3)
@@ -479,7 +484,7 @@ def local_energy(
       ae, ee, r_ae, r_ee = vmap_features(positions, data.atoms)
 
       # Compute potential energy
-      vmap_pot = jax.vmap(potential_energy, (0, 0, 0, None, None, None, None, None, None))
+      vmap_pot = jax.vmap(potential_energy, (0, 0, 0, None, None, None, None, None, None, None))
       pot_spectrum = vmap_pot(
           r_ae,
           ee,
@@ -487,6 +492,7 @@ def local_energy(
           data.atoms,
           effective_charges,
           interaction_strength,
+          interaction_small_length_cutoff,
           barrier_sharpness,
           lattice,
           interaction_truncation_limit)[:, None]
