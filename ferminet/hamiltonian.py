@@ -293,67 +293,39 @@ def potential_electron_electron(
     r_ee: Array,
     interaction_strength: float,
     interaction_small_length_cutoff: float = 0.1,
-    lattice: Optional[Array] = None,
-    interaction_truncation_limit: int = 5,
 ) -> jnp.ndarray:
   """Returns the electron-electron repulsion potential.
 
   Args:
     ee: Shape (nelectrons, nelectrons, ndim). Electron-electron displacements.
     r_ee: Shape (neletrons, nelectrons, :). r_ee[i,j,0] gives the distance
-      between electrons i and j under minimum-image convention.
+      between electrons i and j.
     interaction_strength: Prefactor ``k`` in the k / (r + r0)^3 pair potential.
     interaction_small_length_cutoff: Softening length r0 that regularises the
       1/r^3 singularity at short range.
-    lattice: Shape (ndim, ndim). Lattice vectors for periodic cell.
-    interaction_truncation_limit: Number of unit-cell images included in each
-      positive/negative lattice-vector direction for the real-space summation.
   """
   if interaction_strength == 0.0:
     return 0.0
 
   r0 = interaction_small_length_cutoff
-  n = ee.shape[0]
-  if lattice is None:
-    r_pairs = r_ee[jnp.triu_indices_from(r_ee[..., 0], 1)]
-    return interaction_strength * jnp.sum(1.0 / (r_pairs + r0) ** 3)
-
-  dim = ee.shape[-1]
-  ordinals = jnp.arange(-interaction_truncation_limit,
-                        interaction_truncation_limit + 1)
-  image_indices = jnp.array(list(itertools.product(ordinals, repeat=dim)))
-  # R = A n with lattice vectors as columns in A.
-  image_shifts = jnp.einsum('ij,nj->ni', lattice, image_indices)
-
-  idx_i, idx_j = jnp.triu_indices(n, k=1)
-  pair_displacements = ee[idx_i, idx_j]
-  # Wrap pair displacements to the minimum-image cell so the lattice sum is
-  # correct even when MCMC walkers have drifted many unit cells away from [0,L).
-  reciprocal = jnp.linalg.inv(lattice)
-  frac = jnp.einsum('ij,pj->pi', reciprocal, pair_displacements)
-  pair_displacements = jnp.einsum('ij,pj->pi', lattice, frac - jnp.round(frac))
-  all_displacements = pair_displacements[:, None, :] + image_shifts[None, :, :]
-  distances = jnp.linalg.norm(all_displacements, axis=-1)
-  return interaction_strength * jnp.sum(1.0 / (distances + r0) ** 3)
+  r_pairs = r_ee[jnp.triu_indices_from(r_ee[..., 0], 1)]
+  return interaction_strength * jnp.sum(1.0 / (r_pairs + r0) ** 3)
 
 
-def potential_electron_nuclear(charges: Array, r_ae: Array, barrier_sharpness=1.) -> jnp.ndarray:
+def potential_electron_nuclear(charges: Array, r_ae: Array, barrier_sharpness=1., disk_radius=10.) -> jnp.ndarray:
   """Returns the electron-nuclearpotential.
 
   Args:
     charges: Shape (natoms). Nuclear charges of the atoms.
     r_ae: Shape (nelectrons, natoms). r_ae[i, j] gives the distance between
       electron i and atom j.
+    barrier_sharpness: Controls the sharpness of the confinement potential.
+    disk_radius: Radius of the disk confinement.
   """
-  DISK_RADIUS = 10.
-  RIM_WIDTH = 0.1 / barrier_sharpness #  0.1 / 2
-  BARRIER_HEIGHT = 10 * barrier_sharpness # 2 * 10
-  # return 0. * (-jnp.sum(charges / r_ae[..., 0]))             # turning off e-a for now
-  # returning a disk potential instead
-  potential_energy = jnp.sum(BARRIER_HEIGHT * (1. + jnp.tanh((r_ae[..., 0, 0] - DISK_RADIUS) / RIM_WIDTH)) / 2.)
-  # if ~jnp.all(jnp.isfinite(potential_energy)):
-  #   raise ValueError('Potential energy is infinite.')
-  return 0 * potential_energy # no potential energy with pbc
+  RIM_WIDTH = 0.1 / barrier_sharpness
+  BARRIER_HEIGHT = 10 * barrier_sharpness
+  # returning a disk potential instead of electron-nuclear
+  return jnp.sum(BARRIER_HEIGHT * (1. + jnp.tanh((r_ae[..., 0, 0] - disk_radius) / RIM_WIDTH)) / 2.)
 
 def potential_nuclear_nuclear(charges: Array, atoms: Array) -> jnp.ndarray:
   """Returns the electron-nuclearpotential.
@@ -376,8 +348,7 @@ def potential_energy(
     interaction_strength: float,
     interaction_small_length_cutoff: float = 0.1,
     barrier_sharpness: float = 1.,
-    lattice: Optional[Array] = None,
-    interaction_truncation_limit: int = 5,
+    disk_radius: float = 10.,
 ) -> jnp.ndarray:
   """Returns the potential energy for this electron configuration.
 
@@ -394,10 +365,8 @@ def potential_energy(
               ee,
               r_ee,
               interaction_strength=interaction_strength,
-              interaction_small_length_cutoff=interaction_small_length_cutoff,
-              lattice=lattice,
-              interaction_truncation_limit=interaction_truncation_limit) +
-          potential_electron_nuclear(charges, r_ae, barrier_sharpness=barrier_sharpness) +
+              interaction_small_length_cutoff=interaction_small_length_cutoff) +
+          potential_electron_nuclear(charges, r_ae, barrier_sharpness=barrier_sharpness, disk_radius=disk_radius) +
           potential_nuclear_nuclear(charges, atoms))
 
 
@@ -407,8 +376,8 @@ def local_energy(
     nspins: Sequence[int],
     interaction_strength: float,
     interaction_small_length_cutoff: float = 0.1,
-    interaction_truncation_limit: int = 5,
     barrier_sharpness=1.,
+    disk_radius: float = 10.,
     use_scan: bool = False,
     complex_output: bool = False,
     laplacian_method: str = 'default',
@@ -416,7 +385,6 @@ def local_energy(
     state_specific: bool = False,
     pp_type: str = 'ccecp',
     pp_symbols: Sequence[str] | None = None,
-    lattice: Optional[jnp.ndarray] = None,
 ) -> LocalEnergy:
   """Creates the function to evaluate the local energy.
 
@@ -439,9 +407,6 @@ def local_energy(
       provided.
     pp_symbols: sequence of element symbols for which the pseudopotential is
       used.
-    lattice: Shape (ndim, ndim). Lattice vectors for periodic boundary conditions.
-      If provided, electron-electron distances are computed using minimum-image
-      convention. If None, standard Euclidean distances are used.
 
   Returns:
     Callable with signature e_l(params, key, data) which evaluates the local
@@ -484,7 +449,7 @@ def local_energy(
       ae, ee, r_ae, r_ee = vmap_features(positions, data.atoms)
 
       # Compute potential energy
-      vmap_pot = jax.vmap(potential_energy, (0, 0, 0, None, None, None, None, None, None, None))
+      vmap_pot = jax.vmap(potential_energy, (0, 0, 0, None, None, None, None, None, None))
       pot_spectrum = vmap_pot(
           r_ae,
           ee,
@@ -494,8 +459,7 @@ def local_energy(
           interaction_strength,
           interaction_small_length_cutoff,
           barrier_sharpness,
-          lattice,
-          interaction_truncation_limit)[:, None]
+          disk_radius)[:, None]
 
       if use_pp:
         data_vmap_dims = networks.FermiNetData(
@@ -546,9 +510,6 @@ def local_energy(
       ae, ee, r_ae, r_ee = networks.construct_input_features(
           data.positions, data.atoms
       )
-      # Use periodic distances if lattice is provided
-      if lattice is not None:
-        r_ee = compute_periodic_r_ee(ee, lattice)
       potential = (potential_energy(
                       r_ae,
                       ee,
@@ -558,8 +519,7 @@ def local_energy(
                       interaction_strength=interaction_strength,
                       interaction_small_length_cutoff=interaction_small_length_cutoff,
                       barrier_sharpness=barrier_sharpness,
-                      lattice=lattice,
-                      interaction_truncation_limit=interaction_truncation_limit) +
+                      disk_radius=disk_radius) +
                    pp_local(r_ae) +
                    pp_nonlocal(key, f, params, data, ae, r_ae))
       kinetic = ke(params, data)
