@@ -389,15 +389,18 @@ def _add_suffix_before_ext(path: str, suffix: str) -> str:
 
 def _atomic_save_npy(path: str, arr: np.ndarray):
   """Atomically save a .npy file, without NumPy changing the filename."""
-  # Ensure parent directory exists
-  d = os.path.dirname(path)
-  if d:
-    os.makedirs(d, exist_ok=True)
-  tmp = path + ".tmp"
-  # Write via an open file handle so np.save won't append '.npy'
-  with open(tmp, "wb") as f:
-    np.save(f, arr)
-  os.replace(tmp, path)  # atomic rename
+  try:
+    # Ensure parent directory exists
+    d = os.path.dirname(path)
+    if d:
+      os.makedirs(d, exist_ok=True)
+    tmp = path + ".tmp"
+    # Write via an open file handle so np.save won't append '.npy'
+    with open(tmp, "wb") as f:
+      np.save(f, arr)
+    os.replace(tmp, path)  # atomic rename
+  except OSError as e:
+    logging.warning('Failed to save %s: %s. Skipping this save.', path, e)
 
 
 
