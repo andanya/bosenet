@@ -338,6 +338,7 @@ def make_fermi_net(
     heads_dim: int,
     mlp_hidden_dims: Tuple[int, ...],
     use_layer_norm: bool,
+    predict_logits: bool = False,
 ) -> networks.Network:
   """Psiformer with stacked Self Attention layers.
 
@@ -401,6 +402,7 @@ def make_fermi_net(
       heads_dim=heads_dim,
       mlp_hidden_dims=mlp_hidden_dims,
       use_layer_norm=use_layer_norm,
+      predict_logits=predict_logits,
   )  # pytype: disable=wrong-keyword-args
 
   psiformer_layers = make_psiformer_layers(nspins, charges.shape[0], options)
@@ -453,7 +455,8 @@ def make_fermi_net(
     #   # only used at inference time for excited states
     #   result = result[0], result[1] + params['state_scale']
 
-    result = network_blocks.logproduct_matmul(orbitals)
+    result = network_blocks.logproduct_matmul(
+        orbitals, predict_logits=options.predict_logits)
 
     return result
 

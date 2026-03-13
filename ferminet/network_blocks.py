@@ -182,24 +182,23 @@ def logdet_matmul(
 ####
 
 
-def slogproduct(x, eps: float = 1e-7):
+def slogproduct(x, eps: float = 1e-7, predict_logits: bool = False):
   """Computes sign and log of product of orbitals.
 
   Args:
     x: an array.
+    eps: small constant for numerical stability.
+    predict_logits: if True, treat network outputs as log values directly.
 
   Returns:
     sign, (natural) logarithm of the product of x.
   """
-
-  # # sign = jnp.prod(jnp.sign(x), axis=-1)
-  # # logproduct = jnp.sum(jnp.log(jnp.abs(x) + eps), axis=-1)
-
-  sign = 1
-  logproduct = jnp.sum(x, axis=-1) # let's treat the outputs of the neural net as logs, not just values
-
-  # if jnp.any(jnp.abs(x) < 3 * EPS):
-  #   print("Warning: some elements of x are very small")
+  if predict_logits:
+    sign = 1
+    logproduct = jnp.sum(x, axis=-1)
+  else:
+    sign = jnp.prod(jnp.sign(x), axis=-1)
+    logproduct = jnp.sum(jnp.log(jnp.abs(x) + eps), axis=-1)
 
   return sign, logproduct
 
@@ -207,7 +206,8 @@ def slogproduct(x, eps: float = 1e-7):
 def logproduct_matmul(
     xs: Sequence[jnp.ndarray],
     w: Optional[jnp.ndarray] = None,
-    eps: float = 1e-7
+    eps: float = 1e-7,
+    predict_logits: bool = False,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
   """Combines products and takes dot product with weights in log-domain.
 
@@ -234,7 +234,7 @@ def logproduct_matmul(
   # # are 1x1.
   phase_in, logdet = functools.reduce(
       lambda a, b: (a[0] * b[0], a[1] + b[1]),
-      [slogproduct(x, eps) for x in xs], (1, 0))
+      [slogproduct(x, eps, predict_logits) for x in xs], (1, 0))
       # [slogproduct(x) for x in xs if x.shape[-1] > 1], (1, 0))
 
   # log-sum-exp trick

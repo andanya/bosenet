@@ -294,6 +294,7 @@ class BaseNetworkOptions:
   feature_layer: FeatureLayer = None
   jastrow: jastrows.JastrowType = jastrows.JastrowType.NONE
   complex_output: bool = False
+  predict_logits: bool = False
 
 
 @attr.s(auto_attribs=True, kw_only=True)

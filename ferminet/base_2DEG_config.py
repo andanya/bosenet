@@ -287,6 +287,9 @@ def default() -> ml_collections.ConfigDict:
           # Same structure as make_feature_layer
           'make_envelope_fn': '',
           'make_envelope_kwargs': {},
+          # If true, treat network outputs as log values directly,
+          # rather than taking log(abs(x)).
+          'predict_logits': False,
       },
       'observables': {
           's2': False,  # spin magnitude
