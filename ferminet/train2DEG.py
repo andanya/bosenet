@@ -554,6 +554,7 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         bias_orbitals=cfg.network.bias_orbitals,
         rescale_inputs=cfg.network.get('rescale_inputs', False),
         complex_output=use_complex,
+        predict_logits=cfg.network.get('predict_logits', False),
         **cfg.network.psiformer,
     )
   key, subkey = jax.random.split(key)
