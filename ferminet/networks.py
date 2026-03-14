@@ -295,6 +295,7 @@ class BaseNetworkOptions:
   jastrow: jastrows.JastrowType = jastrows.JastrowType.NONE
   complex_output: bool = False
   predict_logits: bool = False
+  boson_head: str = 'product'
 
 
 @attr.s(auto_attribs=True, kw_only=True)

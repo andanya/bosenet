@@ -290,6 +290,9 @@ def default() -> ml_collections.ConfigDict:
           # If true, treat network outputs as log values directly,
           # rather than taking log(abs(x)).
           'predict_logits': False,
+          # Boson head type: 'product' computes product of orbitals,
+          # 'sum' computes sum of orbitals.
+          'boson_head': 'product',
       },
       'observables': {
           's2': False,  # spin magnitude

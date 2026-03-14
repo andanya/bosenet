@@ -203,6 +203,59 @@ def slogproduct(x, eps: float = 1e-7, predict_logits: bool = False):
   return sign, logproduct
 
 
+def slogsum(x, eps: float = 1e-7):
+  """Computes sign and log of sum of orbitals.
+
+  Args:
+    x: an array.
+    eps: small constant for numerical stability.
+
+  Returns:
+    sign, (natural) logarithm of the sum of x along the last axis.
+  """
+  s = jnp.sum(x, axis=-1)
+  sign = jnp.sign(s)
+  logsum = jnp.log(jnp.abs(s) + eps)
+  return sign, logsum
+
+
+def logsum_matmul(
+    xs: Sequence[jnp.ndarray],
+    w: Optional[jnp.ndarray] = None,
+    eps: float = 1e-7,
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+  """Combines sums and takes dot product with weights in log-domain.
+
+  Analogous to logproduct_matmul but uses sum of orbitals instead of product.
+
+  Args:
+    xs: BoseNet orbitals in each determinant. Either of length 1 with shape
+      (ndet, nelectron) (full_det=True)
+    w: weight of each determinant. If none, a uniform weight is assumed.
+
+  Returns:
+    sum_i w_i S_i in the log domain, where w_i is the weight of S_i, the i-th
+    sum
+  """
+  phase_in, logdet = functools.reduce(
+      lambda a, b: (a[0] * b[0], a[1] + b[1]),
+      [slogsum(x, eps) for x in xs], (1, 0))
+
+  # log-sum-exp trick
+  maxlogdet = jnp.max(logdet)
+  det = phase_in * jnp.exp(logdet - maxlogdet)
+  if w is None:
+    result = jnp.sum(det)
+  else:
+    result = jnp.matmul(det, w)[0]
+  if result.dtype == jnp.complex64 or result.dtype == jnp.complex128:
+    phase_out = jnp.angle(result)
+  else:
+    phase_out = jnp.sign(result)
+  log_out = jnp.log(jnp.abs(result)) + maxlogdet
+  return phase_out, log_out
+
+
 def logproduct_matmul(
     xs: Sequence[jnp.ndarray],
     w: Optional[jnp.ndarray] = None,
