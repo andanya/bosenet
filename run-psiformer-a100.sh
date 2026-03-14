@@ -6,6 +6,7 @@
 #SBATCH --mem=16G
 #SBATCH --output=./andanya-psiformer-jobs/andanya-psiformer-job_%j.out
 #SBATCH --error=./andanya-psiformer-jobs/andanya-psiformer-job_%j.err
+#SBATCH --exclude=r818u03n09
 
 module load CUDA
 module load cuDNN
