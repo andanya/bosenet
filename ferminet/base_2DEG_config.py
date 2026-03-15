@@ -34,6 +34,7 @@ def default() -> ml_collections.ConfigDict:
   cfg = ml_collections.ConfigDict({
       'batch_size': 4096,  # batch size,
       'interaction_strength': 0.0,
+      'interaction_strength_training_set': None,  # list of λ values for multi-λ training
       'interaction_small_length_cutoff': 0.1,
       'interaction_truncation_limit': 5,
       'barrier_sharpness': 1.,

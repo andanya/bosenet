@@ -57,6 +57,9 @@ class FermiNetData:
     spins: spins of each walker, shape (nelectrons).
     atoms: atomic positions, shape (natoms*ndim).
     charges: atomic charges, shape (natoms).
+    interaction_strength: interaction coupling constant lambda, scalar per
+      walker. Used to condition the network on the Hamiltonian parameter and
+      to compute the correct potential energy.
   """
 
   # We need to be able to construct instances of this with leaf nodes as jax
@@ -68,6 +71,7 @@ class FermiNetData:
   spins: Any
   atoms: Any
   charges: Any
+  interaction_strength: Any = 0.0
 
 
 ## Interfaces (public) ##
@@ -92,6 +96,7 @@ class FermiNetLike(Protocol):
       spins: jnp.ndarray,
       atoms: jnp.ndarray,
       charges: jnp.ndarray,
+      interaction_strength: jnp.ndarray = 0.0,
   ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Returns the sign and log magnitude of the wavefunction.
 
@@ -102,6 +107,7 @@ class FermiNetLike(Protocol):
       spins: 1D array specifying the spin state of each electron.
       atoms: positions of nuclei, shape: (natoms, ndim).
       charges: nuclei charges, shape: (natoms).
+      interaction_strength: scalar conditioning parameter lambda.
     """
 
 
@@ -114,6 +120,7 @@ class LogFermiNetLike(Protocol):
       spins: jnp.ndarray,
       atoms: jnp.ndarray,
       charges: jnp.ndarray,
+      interaction_strength: jnp.ndarray = 0.0,
   ) -> jnp.ndarray:
     """Returns the log magnitude of the wavefunction.
 
@@ -124,6 +131,7 @@ class LogFermiNetLike(Protocol):
       spins: 1D array specifying the spin state of each electron.
       atoms: positions of nuclei, shape: (natoms, ndim).
       charges: nuclear charges, shape: (natoms).
+      interaction_strength: scalar conditioning parameter lambda.
     """
 
 
@@ -136,6 +144,7 @@ class OrbitalFnLike(Protocol):
       spins: jnp.ndarray,
       atoms: jnp.ndarray,
       charges: jnp.ndarray,
+      interaction_strength: jnp.ndarray = 0.0,
   ) -> Sequence[jnp.ndarray]:
     """Forward evaluation of the Fermionic Neural Network up to the orbitals.
 
@@ -1183,6 +1192,7 @@ def make_orbitals(                                    # Important: Here the main
       spins: jnp.ndarray,
       atoms: jnp.ndarray,
       charges: jnp.ndarray,
+      interaction_strength: jnp.ndarray = 0.0,
   ) -> Sequence[jnp.ndarray]:
     """Forward evaluation of the Fermionic Neural Network up to the orbitals.               # up to the orbitals!
 
@@ -1192,6 +1202,7 @@ def make_orbitals(                                    # Important: Here the main
       spins: The electron spins, an N dimensional vector.
       atoms: Array with positions of atoms.
       charges: Array with atomic charges.
+      interaction_strength: scalar conditioning parameter lambda.
 
     Returns:
       One matrix (two matrices if options.full_det is False) that exchange
@@ -1207,6 +1218,7 @@ def make_orbitals(                                    # Important: Here the main
         r_ee=r_ee,
         spins=spins,
         charges=charges,
+        interaction_strength=interaction_strength,
     )
 
     if options.envelope.apply_type == envelopes.EnvelopeType.PRE_ORBITAL:
@@ -1303,7 +1315,8 @@ def make_state_matrix(signed_network: FermiNetLike, n: int) -> FermiNetLike:
     into a matrix of wavefunctions, one with the sign and one with the log.
   """
 
-  def state_matrix(params, pos, spins, atoms, charges):
+  def state_matrix(params, pos, spins, atoms, charges,
+                   interaction_strength=0.0):
     """Evaluate state_matrix for a given ansatz."""
     # `pos` has shape (n*nelectron*ndim), but can be reshaped as
     # (n, nelectron, ndim), that is, the first dimension indexes which excited
@@ -1314,8 +1327,9 @@ def make_state_matrix(signed_network: FermiNetLike, n: int) -> FermiNetLike:
     # always evaluated at the same atomic geometry.
     pos_ = jnp.reshape(pos, [n, -1])
     spins_ = jnp.reshape(spins, [n, -1])
-    vmap_network = jax.vmap(signed_network, (None, 0, 0, None, None))
-    sign_mat, log_mat = vmap_network(params, pos_, spins_, atoms, charges)
+    vmap_network = jax.vmap(signed_network, (None, 0, 0, None, None, None))
+    sign_mat, log_mat = vmap_network(params, pos_, spins_, atoms, charges,
+                                     interaction_strength)
     return sign_mat, log_mat
 
   return state_matrix
@@ -1339,10 +1353,12 @@ def make_state_trace(signed_network: FermiNetLike, n: int) -> FermiNetLike:
   """
   state_matrix = make_state_matrix(signed_network, n)
 
-  def state_trace(params, pos, spins, atoms, charges, **kwargs):
+  def state_trace(params, pos, spins, atoms, charges,
+                  interaction_strength=0.0, **kwargs):
     """Evaluate trace of the state matrix for a given ansatz."""
     _, log_in = state_matrix(
-        params, pos, spins, atoms=atoms, charges=charges, **kwargs)
+        params, pos, spins, atoms=atoms, charges=charges,
+        interaction_strength=interaction_strength, **kwargs)
 
     return jnp.trace(log_in)
 
@@ -1374,10 +1390,12 @@ def make_total_ansatz(signed_network: FermiNetLike,
   """
   state_matrix = make_state_matrix(signed_network, n)
 
-  def total_ansatz(params, pos, spins, atoms, charges, **kwargs):
+  def total_ansatz(params, pos, spins, atoms, charges,
+                   interaction_strength=0.0, **kwargs):
     """Evaluate meta_determinant for a given ansatz."""
     sign_in, log_in = state_matrix(
-        params, pos, spins, atoms=atoms, charges=charges, **kwargs)
+        params, pos, spins, atoms=atoms, charges=charges,
+        interaction_strength=interaction_strength, **kwargs)
 
     logmax = jnp.max(log_in)  # logsumexp trick
     if complex_output:

@@ -191,11 +191,12 @@ def make_loss(network: networks.LogFermiNetLike,
       in_axes=(
           None,
           0,
-          networks.FermiNetData(positions=0, spins=0, atoms=0, charges=0),
+          networks.FermiNetData(positions=0, spins=0, atoms=0, charges=0,
+                                interaction_strength=0),
       ),
       out_axes=(0, 0)
   )
-  batch_network = vmap(network, in_axes=(None, 0, 0, 0, 0), out_axes=0)
+  batch_network = vmap(network, in_axes=(None, 0, 0, 0, 0, 0), out_axes=0)
 
   @jax.custom_jvp
   def total_energy(
@@ -256,13 +257,15 @@ def make_loss(network: networks.LogFermiNetLike,
     # convention between total_energy and batch_network
     data = primals[2]
     data_tangents = tangents[2]
-    primals = (primals[0], data.positions, data.spins, data.atoms, data.charges)
+    primals = (primals[0], data.positions, data.spins, data.atoms, data.charges,
+               data.interaction_strength)
     tangents = (
         tangents[0],
         data_tangents.positions,
         data_tangents.spins,
         data_tangents.atoms,
         data_tangents.charges,
+        data_tangents.interaction_strength,
     )
     psi_primal, psi_tangent = jax.jvp(batch_network, primals, tangents)
     if complex_output:
@@ -331,11 +334,12 @@ def make_wqmc_loss(
       in_axes=(
           None,
           0,
-          networks.FermiNetData(positions=0, spins=0, atoms=0, charges=0),
+          networks.FermiNetData(positions=0, spins=0, atoms=0, charges=0,
+                                interaction_strength=0),
       ),
       out_axes=(0, 0)
   )
-  batch_network = vmap(network, in_axes=(None, 0, 0, 0, 0), out_axes=0)
+  batch_network = vmap(network, in_axes=(None, 0, 0, 0, 0, 0), out_axes=0)
 
   @jax.custom_jvp
   def total_energy(
@@ -372,6 +376,7 @@ def make_wqmc_loss(
           spins=data.spins,
           atoms=data.atoms,
           charges=data.charges,
+          interaction_strength=data.interaction_strength,
       )
       return batch_local_energy(params, keys, network_data)[0].sum()
 
@@ -404,19 +409,22 @@ def make_wqmc_loss(
     else:
       diff = aux_data.local_energy - loss
 
-    def log_q(params_, pos_, spins_, atoms_, charges_):
-      out = batch_network(params_, pos_, spins_, atoms_, charges_)
+    def log_q(params_, pos_, spins_, atoms_, charges_, interaction_strength_):
+      out = batch_network(params_, pos_, spins_, atoms_, charges_,
+                          interaction_strength_)
       kfac_jax.register_normal_predictive_distribution(out[:, None])
       return out.sum()
 
     score = jax.grad(log_q, argnums=1)
-    primals = (params, data.positions, data.spins, data.atoms, data.charges)
+    primals = (params, data.positions, data.spins, data.atoms, data.charges,
+               data.interaction_strength)
     tangents = (
         tangents[0],
         tangents[2].positions,
         tangents[2].spins,
         tangents[2].atoms,
         tangents[2].charges,
+        tangents[2].interaction_strength,
     )
     score_primal, score_tangent = jax.jvp(score, primals, tangents)
 
@@ -484,10 +492,11 @@ def make_energy_overlap_loss(network: networks.LogFermiNetLike,
 
   vmap = jax.vmap if max_vmap_batch_size == 0 else functools.partial(
       folx.batched_vmap, max_batch_size=max_vmap_batch_size)
-  data_axes = networks.FermiNetData(positions=0, spins=0, atoms=0, charges=0)
+  data_axes = networks.FermiNetData(positions=0, spins=0, atoms=0, charges=0,
+                                    interaction_strength=0)
   batch_local_energy = vmap(
       local_energy, in_axes=(None, 0, data_axes), out_axes=(0, 0))
-  batch_network = vmap(network, in_axes=(None, 0, 0, 0, 0), out_axes=0)
+  batch_network = vmap(network, in_axes=(None, 0, 0, 0, 0, 0), out_axes=0)
   overlap_weight = jnp.array(overlap_weight)
 
   # TODO(pfau): how much of this can be factored out with make_loss?
@@ -520,7 +529,8 @@ def make_energy_overlap_loss(network: networks.LogFermiNetLike,
                                       data.positions,
                                       data.spins,
                                       data.atoms,
-                                      data.charges)
+                                      data.charges,
+                                      data.interaction_strength)
     sign_psi_diag = jax.vmap(jnp.diag)(sign_psi)[..., None]
     log_psi_diag = jax.vmap(jnp.diag)(log_psi)[..., None]
     s_ij_local = sign_psi * sign_psi_diag * jnp.exp(log_psi - log_psi_diag)
@@ -589,9 +599,11 @@ def make_energy_overlap_loss(network: networks.LogFermiNetLike,
     # convention between total_energy and batch_network
     data = primals[2]
     data_tangents = tangents[2]
-    primals = (primals[0], data.positions, data.spins, data.atoms, data.charges)
+    primals = (primals[0], data.positions, data.spins, data.atoms, data.charges,
+               data.interaction_strength)
     tangents = (tangents[0], data_tangents.positions, data_tangents.spins,
-                data_tangents.atoms, data_tangents.charges)
+                data_tangents.atoms, data_tangents.charges,
+                data_tangents.interaction_strength)
 
     psi_primal, psi_tangent = jax.jvp(batch_network, primals, tangents)
     _, log_primal = psi_primal

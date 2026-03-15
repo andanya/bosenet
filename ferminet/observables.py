@@ -152,12 +152,14 @@ def make_s2(
     if states:
       state_matrix_network = networks.make_state_matrix(signed_network, states)
       sign_psi, log_psi = state_matrix_network(
-          params, data.positions, data.spins, data.atoms, data.charges)
+          params, data.positions, data.spins, data.atoms, data.charges,
+          data.interaction_strength)
       log_psi_max = jnp.max(log_psi)
       psi = sign_psi * jnp.exp(log_psi - log_psi_max)  # avoid underflow
     else:
       sign_psi, log_psi = signed_network(params, data.positions, data.spins,
-                                         data.atoms, data.charges)
+                                         data.atoms, data.charges,
+                                         data.interaction_strength)
 
     if assign_spin:
       if states:
@@ -174,7 +176,8 @@ def make_s2(
           xx = xa.at[:, ia].set(xb[:, ib]), xb.at[:, ib].set(xa[:, ia])
           xx = jnp.reshape(jnp.concatenate(xx, axis=1), -1)
           sign_psi_swap, log_psi_swap = state_matrix_network(
-              params, xx, data.spins, data.atoms, data.charges)
+              params, xx, data.spins, data.atoms, data.charges,
+              data.interaction_strength)
           # Minus sign from reordering electron positions such that alpha
           # electrons come first.
           # out to be numerically unstable.
@@ -189,7 +192,8 @@ def make_s2(
           xx = xa.at[ia].set(xb[ib]), xb.at[ib].set(xa[ia])
           xx = jnp.reshape(jnp.concatenate(xx), -1)
           sign_psi_swap, log_psi_swap = signed_network(params, xx, data.spins,
-                                                       data.atoms, data.charges)
+                                                       data.atoms, data.charges,
+                                                       data.interaction_strength)
           # Minus sign from reordering electron positions such that alpha
           # electrons come first.
           s2 -= sign_psi * sign_psi_swap * jnp.exp(log_psi_swap - log_psi)
@@ -211,7 +215,8 @@ def make_s2(
         xx = data.spins.at[ia].set(data.spins[ib])
         xx = xx.at[ib].set(data.spins[ia])
         sign_psi_swap, log_psi_swap = signed_network(
-            params, data.positions, xx, data.atoms, data.charges)
+            params, data.positions, xx, data.atoms, data.charges,
+            data.interaction_strength)
         # Unlike in the fixed-spin case, the wavefunction has no privileged
         # ordering of electrons due to their spin.
         s2 += sign_psi * sign_psi_swap * jnp.exp(log_psi_swap - log_psi)
@@ -256,7 +261,8 @@ def make_dipole(
     if states:
       state_matrix_network = networks.make_state_matrix(signed_network, states)
       sign_psi, log_psi = state_matrix_network(
-          params, data.positions, data.spins, data.atoms, data.charges)
+          params, data.positions, data.spins, data.atoms, data.charges,
+          data.interaction_strength)
       log_psi_max = jnp.max(log_psi)
       psi = sign_psi * jnp.exp(log_psi - log_psi_max)  # avoid underflow
       mean_pos = jnp.sum(jnp.reshape(data.positions, (states, -1, 3)), axis=1)
@@ -352,7 +358,7 @@ def make_density_matrix(
   else:
     signed_net = signed_network
   batch_signed_net = jax.vmap(
-      signed_net, in_axes=(None, 0, 0, 0, 0), out_axes=0,)
+      signed_net, in_axes=(None, 0, 0, 0, 0, 0), out_axes=0,)
 
   def density_update(key,
                      params: networks.ParamTree,
@@ -366,6 +372,7 @@ def make_density_matrix(
           spins=data.spins,
           atoms=data.atoms,
           charges=data.charges,
+          interaction_strength=data.interaction_strength,
       )
 
       rprime_data, rprime_probs, rprime_pmove = rprime_step(

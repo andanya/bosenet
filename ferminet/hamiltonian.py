@@ -112,14 +112,16 @@ def local_kinetic_energy(
       eye = jnp.eye(n)
       grad_f = jax.grad(logabs_f, argnums=1)
       def grad_f_closure(x):
-        return grad_f(params, x, data.spins, data.atoms, data.charges)
+        return grad_f(params, x, data.spins, data.atoms, data.charges,
+                      data.interaction_strength)
 
       primal, dgrad_f = jax.linearize(grad_f_closure, data.positions)
 
       if complex_output:
         grad_phase = jax.grad(phase_f, argnums=1)
         def grad_phase_closure(x):
-          return grad_phase(params, x, data.spins, data.atoms, data.charges)
+          return grad_phase(params, x, data.spins, data.atoms, data.charges,
+                            data.interaction_strength)
         phase_primal, dgrad_phase = jax.linearize(
             grad_phase_closure, data.positions)
         hessian_diagonal = (
@@ -143,7 +145,8 @@ def local_kinetic_energy(
 
   elif laplacian_method == 'folx':
     def _lapl_over_f(params, data):
-      f_closure = lambda x: f(params, x, data.spins, data.atoms, data.charges)
+      f_closure = lambda x: f(params, x, data.spins, data.atoms, data.charges,
+                               data.interaction_strength)
       f_wrapped = folx.forward_laplacian(f_closure, sparsity_threshold=6)
       output = f_wrapped(data.positions)
       result = - (output[1].laplacian +
@@ -183,18 +186,21 @@ def excited_kinetic_energy_matrix(
       wavefunction for all combinations of electron sets and excited states.
   """
 
-  def _lapl_all_states(params, pos, spins, atoms, charges):
+  def _lapl_all_states(params, pos, spins, atoms, charges,
+                       interaction_strength=0.0):
     """Return K psi/psi for each excited state."""
     n = pos.shape[0]
     eye = jnp.eye(n)
     grad_f = jax.jacrev(utils.select_output(f, 1), argnums=1)
-    grad_f_closure = lambda x: grad_f(params, x, spins, atoms, charges)
+    grad_f_closure = lambda x: grad_f(params, x, spins, atoms, charges,
+                                       interaction_strength)
     primal, dgrad_f = jax.linearize(grad_f_closure, pos)
 
     if complex_output:
       grad_phase = jax.jacrev(utils.select_output(f, 0), argnums=1)
       def grad_phase_closure(x):
-        return grad_phase(params, x, spins, atoms, charges)
+        return grad_phase(params, x, spins, atoms, charges,
+                          interaction_strength)
       phase_primal, dgrad_phase = jax.linearize(grad_phase_closure, pos)
       hessian_diagonal = (
           lambda i: dgrad_f(eye[i])[:, i] + 1.j * dgrad_phase(eye[i])[:, i]
@@ -229,14 +235,17 @@ def excited_kinetic_energy_matrix(
     spins_ = jnp.reshape(data.spins, [states, -1])
 
     if laplacian_method == 'default':
-      vmap_f = jax.vmap(f, (None, 0, 0, None, None))
-      sign_mat, log_mat = vmap_f(params, pos_, spins_, data.atoms, data.charges)
-      vmap_lapl = jax.vmap(_lapl_all_states, (None, 0, 0, None, None))
+      vmap_f = jax.vmap(f, (None, 0, 0, None, None, None))
+      sign_mat, log_mat = vmap_f(params, pos_, spins_, data.atoms, data.charges,
+                                 data.interaction_strength)
+      vmap_lapl = jax.vmap(_lapl_all_states, (None, 0, 0, None, None, None))
       lapl = vmap_lapl(params, pos_, spins_, data.atoms,
-                       data.charges)  # K psi_i(r_j) / psi_i(r_j)
+                       data.charges,
+                       data.interaction_strength)  # K psi_i(r_j) / psi_i(r_j)
     elif laplacian_method == 'folx':
       # CAUTION!! Only the first array of spins is being passed!
-      f_closure = lambda x: f(params, x, spins_[0], data.atoms, data.charges)
+      f_closure = lambda x: f(params, x, spins_[0], data.atoms, data.charges,
+                               data.interaction_strength)
       f_wrapped = folx.forward_laplacian(f_closure, sparsity_threshold=6)
       sign_out, log_out = folx.batched_vmap(f_wrapped, 1)(pos_)
       log_mat = log_out.x
@@ -309,9 +318,6 @@ def potential_electron_electron(
     interaction_truncation_limit: Number of unit-cell images included in each
       positive/negative lattice-vector direction for the real-space summation.
   """
-  if interaction_strength == 0.0:
-    return 0.0
-
   r0 = interaction_small_length_cutoff
   n = ee.shape[0]
   if lattice is None:
@@ -405,7 +411,7 @@ def local_energy(
     f: networks.FermiNetLike,
     charges: jnp.ndarray,
     nspins: Sequence[int],
-    interaction_strength: float,
+    interaction_strength: float = 0.0,
     interaction_small_length_cutoff: float = 0.1,
     interaction_truncation_limit: int = 5,
     barrier_sharpness=1.,
@@ -483,7 +489,7 @@ def local_energy(
       positions = jnp.reshape(data.positions, [states, -1])
       ae, ee, r_ae, r_ee = vmap_features(positions, data.atoms)
 
-      # Compute potential energy
+      # Compute potential energy (use per-walker interaction_strength from data)
       vmap_pot = jax.vmap(potential_energy, (0, 0, 0, None, None, None, None, None, None, None))
       pot_spectrum = vmap_pot(
           r_ae,
@@ -491,7 +497,7 @@ def local_energy(
           r_ee,
           data.atoms,
           effective_charges,
-          interaction_strength,
+          data.interaction_strength,
           interaction_small_length_cutoff,
           barrier_sharpness,
           lattice,
@@ -518,7 +524,8 @@ def local_energy(
         # TODO(pfau): factor out code repeated here and in _lapl_over_f
         pos_ = jnp.reshape(data.positions, [states, -1])
         spins_ = jnp.reshape(data.spins, [states, -1])
-        f_closure = lambda x: f(params, x, spins_[0], data.atoms, data.charges)
+        f_closure = lambda x: f(params, x, spins_[0], data.atoms, data.charges,
+                                 data.interaction_strength)
         f_wrapped = folx.forward_laplacian(f_closure, sparsity_threshold=6)
         sign_out, log_out = folx.batched_vmap(f_wrapped, 1)(pos_)
         kin = -(log_out.laplacian +
@@ -549,13 +556,15 @@ def local_energy(
       # Use periodic distances if lattice is provided
       if lattice is not None:
         r_ee = compute_periodic_r_ee(ee, lattice)
+      # Use per-walker interaction_strength from data (enables multi-λ training)
+      walker_interaction_strength = data.interaction_strength
       potential = (potential_energy(
                       r_ae,
                       ee,
                       r_ee,
                       data.atoms,
                       effective_charges,
-                      interaction_strength=interaction_strength,
+                      interaction_strength=walker_interaction_strength,
                       interaction_small_length_cutoff=interaction_small_length_cutoff,
                       barrier_sharpness=barrier_sharpness,
                       lattice=lattice,

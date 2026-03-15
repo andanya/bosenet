@@ -575,7 +575,7 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
   else:
     logabs_network = lambda *args, **kwargs: signed_network(*args, **kwargs)[1]
   batch_network = jax.vmap(
-      logabs_network, in_axes=(None, 0, 0, 0, 0), out_axes=0
+      logabs_network, in_axes=(None, 0, 0, 0, 0, 0), out_axes=0
   )  # batched network
 
   # Exclusively when computing the gradient wrt the energy for complex
@@ -646,6 +646,24 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
      mcmc_width_ckpt,
      density_state_ckpt) = checkpoint.restore(
          ckpt_restore_filename, host_batch_size)
+    # Backward compatibility: add interaction_strength if not in checkpoint
+    if not hasattr(data, 'interaction_strength') or data.interaction_strength is None:
+      training_set = cfg.get('interaction_strength_training_set', None)
+      if training_set:
+        training_set = list(training_set)
+        num_lambdas = len(training_set)
+        walker_lambdas = jnp.array(
+            [training_set[i % num_lambdas] for i in range(device_batch_size)],
+            dtype=jnp.float32)
+      else:
+        walker_lambdas = jnp.full(
+            (device_batch_size,), cfg.interaction_strength, dtype=jnp.float32)
+      batch_interaction_strength = kfac_jax.utils.replicate_all_local_devices(
+          walker_lambdas)
+      data = networks.FermiNetData(
+          positions=data.positions, spins=data.spins,
+          atoms=data.atoms, charges=data.charges,
+          interaction_strength=batch_interaction_strength)
   else:
     logging.info('No checkpoint found. Training new model.')
     key, subkey = jax.random.split(key)
@@ -667,8 +685,27 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
     pos = kfac_jax.utils.broadcast_all_local_devices(pos)
     spins = jnp.reshape(spins, data_shape + (-1,))
     spins = kfac_jax.utils.broadcast_all_local_devices(spins)
+    # Initialize per-walker interaction_strength
+    # If interaction_strength_training_set is provided, partition walkers
+    # across λ values for multi-λ training. Otherwise, use single λ.
+    training_set = cfg.get('interaction_strength_training_set', None)
+    if training_set:
+      training_set = list(training_set)
+      num_lambdas = len(training_set)
+      # Assign each walker a λ value by cycling through the training set
+      walker_lambdas = jnp.array(
+          [training_set[i % num_lambdas] for i in range(device_batch_size)],
+          dtype=jnp.float32)
+    else:
+      walker_lambdas = jnp.full(
+          (device_batch_size,), cfg.interaction_strength, dtype=jnp.float32)
+    walker_lambdas = jnp.reshape(walker_lambdas, (device_batch_size,))
+    batch_interaction_strength = kfac_jax.utils.replicate_all_local_devices(
+        walker_lambdas)
+
     data = networks.FermiNetData(
-        positions=pos, spins=spins, atoms=batch_atoms, charges=batch_charges
+        positions=pos, spins=spins, atoms=batch_atoms, charges=batch_charges,
+        interaction_strength=batch_interaction_strength,
     )
 
     t_init = 0
@@ -815,7 +852,7 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         state_specific=(cfg.optim.objective == 'vmc_overlap'),
         pp_type=cfg.system.get('pp', {'type': 'ccecp'}).get('type'),
         pp_symbols=pp_symbols if cfg.system.get('use_pp') else None,
-        interaction_strength=cfg.interaction_strength,
+        # interaction_strength now comes from data.interaction_strength (per-walker)
         interaction_small_length_cutoff=cfg.interaction_small_length_cutoff,
         interaction_truncation_limit=cfg.interaction_truncation_limit,
         barrier_sharpness=cfg.barrier_sharpness,
@@ -1011,10 +1048,11 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
       state_matrix = utils.select_output(
           networks.make_state_matrix(signed_network,
                                      cfg.system.states), 1)
-      batch_state_matrix = jax.vmap(state_matrix, (None, 0, 0, 0, 0))
+      batch_state_matrix = jax.vmap(state_matrix, (None, 0, 0, 0, 0, 0))
       pmap_state_matrix = constants.pmap(batch_state_matrix)
       log_psi_vals = pmap_state_matrix(
-          params, data.positions, data.spins, data.atoms, data.charges)
+          params, data.positions, data.spins, data.atoms, data.charges,
+          data.interaction_strength)
       state_scale = np.mean(log_psi_vals, axis=[0, 1, 2])
       state_scale = jax.experimental.multihost_utils.broadcast_one_to_all(
           state_scale)
