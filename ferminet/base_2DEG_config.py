@@ -34,6 +34,9 @@ def default() -> ml_collections.ConfigDict:
   cfg = ml_collections.ConfigDict({
       'batch_size': 4096,  # batch size,
       'short_range_repulsion_strength': 0.0,
+      'interaction_type': 'short_range',  # 'short_range' or 'inverse_cubic'
+      'interaction_strength': 1.0,  # C in C/(r+a)^3
+      'interaction_small_length_cutoff': 0.1,  # a in C/(r+a)^3
       'barrier_sharpness': 1.,
       'disk_radius': 10.,
       # Config module used. Should be set in get_config function as either the

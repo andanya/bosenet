@@ -814,7 +814,10 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         pp_symbols=pp_symbols if cfg.system.get('use_pp') else None,
         short_range_repulsion_strength=cfg.short_range_repulsion_strength,
         barrier_sharpness=cfg.barrier_sharpness,
-        disk_radius=cfg.disk_radius
+        disk_radius=cfg.disk_radius,
+        interaction_type=cfg.interaction_type,
+        interaction_strength=cfg.interaction_strength,
+        interaction_small_length_cutoff=cfg.interaction_small_length_cutoff
         )
 
   if cfg.optim.get('spin_energy', 0.0) > 0.0:            # + S^2 term if needed

@@ -264,22 +264,34 @@ def excited_kinetic_energy_matrix(
 
 
 def potential_electron_electron(r_ee: Array,
-        short_range_repulsion_strength) -> jnp.ndarray: # jnp.floating actually
+        short_range_repulsion_strength,
+        interaction_type: str = 'short_range',
+        interaction_strength: float = 1.0,
+        interaction_small_length_cutoff: float = 0.1,
+        ) -> jnp.ndarray: # jnp.floating actually
   """Returns the electron-electron potential.
 
   Args:
     r_ee: Shape (neletrons, nelectrons, :). r_ee[i,j,0] gives the distance
       between electrons i and j. Other elements in the final axes are not
       required.
+    interaction_type: 'short_range' for Gaussian repulsion,
+      'inverse_cubic' for C/(r+a)^3 repulsion.
+    interaction_strength: C in C/(r+a)^3 (only used for inverse_cubic).
+    interaction_small_length_cutoff: a in C/(r+a)^3 (only used for inverse_cubic).
   """
   r_ee = r_ee[jnp.triu_indices_from(r_ee[..., 0], 1)]
-  # return 0. * (1.0 / r_ee / 5.).sum()                            # e-e with eps = 5
-  RHO = 0.1
-  # now introduce short-range repulsion
-  if short_range_repulsion_strength:
-    return short_range_repulsion_strength * (jnp.exp(-1. * r_ee * r_ee / 2 / RHO / RHO) / (2 * jnp.pi * RHO * RHO)).sum()
+
+  if interaction_type == 'inverse_cubic':
+    return interaction_strength * jnp.sum(
+        1.0 / (r_ee + interaction_small_length_cutoff) ** 3)
   else:
-    return 0. # * (1.0 / r_ee / 5.).sum()  
+    # short_range: Gaussian repulsion
+    RHO = 0.1
+    if short_range_repulsion_strength:
+      return short_range_repulsion_strength * (jnp.exp(-1. * r_ee * r_ee / 2 / RHO / RHO) / (2 * jnp.pi * RHO * RHO)).sum()
+    else:
+      return 0.
 
 
 def potential_electron_nuclear(charges: Array, r_ae: Array, barrier_sharpness=1., disk_radius=10.) -> jnp.ndarray:
@@ -313,7 +325,11 @@ def potential_nuclear_nuclear(charges: Array, atoms: Array) -> jnp.ndarray:
 
 def potential_energy(r_ae: Array, r_ee: Array, atoms: Array,
                      charges: Array, short_range_repulsion_strength,
-                     barrier_sharpness=1., disk_radius=10.) -> jnp.ndarray:
+                     barrier_sharpness=1., disk_radius=10.,
+                     interaction_type: str = 'short_range',
+                     interaction_strength: float = 1.0,
+                     interaction_small_length_cutoff: float = 0.1,
+                     ) -> jnp.ndarray:
   """Returns the potential energy for this electron configuration.
 
   Args:
@@ -325,7 +341,11 @@ def potential_energy(r_ae: Array, r_ee: Array, atoms: Array,
     atoms: Shape (natoms, ndim). Positions of the atoms.
     charges: Shape (natoms). Nuclear charges of the atoms.
   """
-  return (potential_electron_electron(r_ee, short_range_repulsion_strength=short_range_repulsion_strength) +
+  return (potential_electron_electron(r_ee,
+              short_range_repulsion_strength=short_range_repulsion_strength,
+              interaction_type=interaction_type,
+              interaction_strength=interaction_strength,
+              interaction_small_length_cutoff=interaction_small_length_cutoff) +
           potential_electron_nuclear(charges, r_ae, barrier_sharpness=barrier_sharpness, disk_radius=disk_radius) +
           potential_nuclear_nuclear(charges, atoms))
 
@@ -337,6 +357,9 @@ def local_energy(
     short_range_repulsion_strength,
     barrier_sharpness=1.,
     disk_radius=10.,
+    interaction_type: str = 'short_range',
+    interaction_strength: float = 1.0,
+    interaction_small_length_cutoff: float = 0.1,
     use_scan: bool = False,
     complex_output: bool = False,
     laplacian_method: str = 'default',
@@ -465,7 +488,10 @@ def local_energy(
                       r_ae, r_ee, data.atoms, effective_charges,
                       short_range_repulsion_strength=short_range_repulsion_strength,
                       barrier_sharpness=barrier_sharpness,
-                      disk_radius=disk_radius) +
+                      disk_radius=disk_radius,
+                      interaction_type=interaction_type,
+                      interaction_strength=interaction_strength,
+                      interaction_small_length_cutoff=interaction_small_length_cutoff) +
                    pp_local(r_ae) +
                    pp_nonlocal(key, f, params, data, ae, r_ae))
       kinetic = ke(params, data)
