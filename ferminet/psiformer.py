@@ -296,8 +296,11 @@ def make_psiformer_layers(
 ) -> Tuple[networks.InitLayersFn, networks.ApplyLayersFn]:
   """Creates the permutation-equivariant layers for the Psiformer.
 
-  Architecture (following Zaklama et al., 2026):
-    Embed -> SA(1 layer) -> CA(lambda -> sites) -> SA(remaining layers) -> out
+  Architecture — Per-Layer Cross-Attention (PLCA) conditioning:
+    Embed -> [SA -> CA(lambda)]_L -> out
+
+  Each self-attention layer is followed by a cross-attention injection of the
+  parameter token p_lambda, so lambda influences every layer of the network.
 
   Args:
     nspins: Tuple with number of spin up and spin down electrons.
@@ -309,28 +312,17 @@ def make_psiformer_layers(
   """
   del nspins, natoms  # Unused.
 
-  # Attention network: split into pre-CA and post-CA blocks.
   attn_dim = options.num_heads * options.heads_dim
-  num_pre_ca = min(1, options.num_layers)
-  num_post_ca = max(0, options.num_layers - num_pre_ca)
+  num_layers = options.num_layers
 
-  pre_ca_attn_init, pre_ca_attn_apply = make_self_attention_block(
-      num_layers=num_pre_ca,
-      num_heads=options.num_heads,
-      heads_dim=options.heads_dim,
-      mlp_hidden_dims=options.mlp_hidden_dims,
-      use_layer_norm=options.use_layer_norm,
-  )
-  if num_post_ca > 0:
-    post_ca_attn_init, post_ca_attn_apply = make_self_attention_block(
-        num_layers=num_post_ca,
-        num_heads=options.num_heads,
-        heads_dim=options.heads_dim,
-        mlp_hidden_dims=options.mlp_hidden_dims,
-        use_layer_norm=options.use_layer_norm,
-    )
+  # Per-layer self-attention components.
+  attention_init, attention_apply = make_multi_head_attention(
+      options.num_heads, options.heads_dim)
+  if options.use_layer_norm:
+    layer_norm_init, layer_norm_apply = make_layer_norm()
+  mlp_init, mlp_apply = make_mlp()
 
-  # Lambda conditioning modules.
+  # Lambda conditioning modules (shared embedding, per-layer CA).
   lambda_embed_init, lambda_embed_apply = make_lambda_embedding(attn_dim)
   cross_attn_init, cross_attn_apply = make_cross_attention(attn_dim)
 
@@ -349,20 +341,28 @@ def make_psiformer_layers(
         subkey, in_dim=feature_dim, out_dim=attn_dim, include_bias=False
     )['w']
 
-    # Pre-CA self-attention block params.
-    key, subkey = jax.random.split(key)
-    params['pre_ca'] = pre_ca_attn_init(subkey, attn_dim)
-
-    # Lambda conditioning params.
+    # Shared lambda embedding.
     key, subkey = jax.random.split(key)
     params['lambda_embed'] = lambda_embed_init(subkey)
-    key, subkey = jax.random.split(key)
-    params['cross_attn'] = cross_attn_init(subkey)
 
-    # Post-CA self-attention block params.
-    if num_post_ca > 0:
-      key, subkey = jax.random.split(key)
-      params['post_ca'] = post_ca_attn_init(subkey, attn_dim)
+    # Per-layer params: SA + CA at every layer.
+    sa_params = []
+    ln_params = []
+    mlp_params = []
+    ca_params = []
+    for _ in range(num_layers):
+      key, attn_key, mlp_key, ca_key = jax.random.split(key, 4)
+      sa_params.append(attention_init(
+          attn_key, q_d=attn_dim, kv_d=attn_dim, output_channels=attn_dim))
+      if options.use_layer_norm:
+        ln_params.append([layer_norm_init(attn_dim), layer_norm_init(attn_dim)])
+      mlp_params.append(mlp_init(mlp_key, options.mlp_hidden_dims, attn_dim))
+      ca_params.append(cross_attn_init(ca_key))
+
+    params['attention'] = sa_params
+    params['ln'] = ln_params
+    params['mlp'] = mlp_params
+    params['cross_attn'] = ca_params
 
     return attn_dim, params
 
@@ -379,7 +379,7 @@ def make_psiformer_layers(
   ) -> jnp.ndarray:
     """Applies the Psiformer interaction layers to a walker configuration.
 
-    Architecture: Embed -> SA -> CA(lambda) -> SA -> output
+    Architecture — PLCA: Embed -> [SA -> CA(lambda)]_L -> output
 
     Args:
       params: parameters for the interaction and permuation-equivariant layers.
@@ -412,18 +412,26 @@ def make_psiformer_layers(
     # Embed into attention dimension.
     x = jnp.dot(features, params['embed'])
 
-    # ── Step 1: Pre-CA self-attention ──
-    x = pre_ca_attn_apply(params['pre_ca'], x)
-
-    # ── Step 2: Lambda conditioning via cross-attention ──
-    # Embed scalar lambda into a parameter token.
+    # Embed scalar lambda into a parameter token (shared across layers).
     p_lambda = lambda_embed_apply(params['lambda_embed'], interaction_strength)
-    # Inject lambda information into all site tokens.
-    x = cross_attn_apply(params['cross_attn'], x, p_lambda)
 
-    # ── Step 3: Post-CA self-attention ──
-    if num_post_ca > 0:
-      x = post_ca_attn_apply(params['post_ca'], x)
+    # ── Per-layer: SA -> CA(lambda) ──
+    for layer in range(num_layers):
+      # Self-attention + residual.
+      attn_output = attention_apply(
+          params['attention'][layer], x, x, x)
+      x = x + attn_output
+      if options.use_layer_norm:
+        x = layer_norm_apply(params['ln'][layer][0], x)
+
+      # MLP + residual.
+      mlp_output = mlp_apply(params['mlp'][layer], x)
+      x = x + mlp_output
+      if options.use_layer_norm:
+        x = layer_norm_apply(params['ln'][layer][1], x)
+
+      # Cross-attention injection of lambda.
+      x = cross_attn_apply(params['cross_attn'][layer], x, p_lambda)
 
     return x
 
