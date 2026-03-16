@@ -814,12 +814,15 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
   # MCMC
   # Construct MCMC step
   atoms_to_mcmc = atoms if cfg.mcmc.scale_by_nuclear_distance else None
+  pbc_lattice_for_mcmc = cfg.network.get(
+      'make_feature_layer_kwargs', {}).get('lattice', None)
   mcmc_step = mcmc.make_mcmc_step(
       batch_network,
       device_batch_size,
       steps=cfg.mcmc.steps,
       atoms=atoms_to_mcmc,
       blocks=cfg.mcmc.blocks * num_states,
+      lattice=pbc_lattice_for_mcmc,
   )
   # Construct loss and optimizer
   laplacian_method = cfg.optim.get('laplacian', 'default')

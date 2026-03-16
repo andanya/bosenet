@@ -225,7 +225,8 @@ def make_mcmc_step(batch_network,
                    steps=10,
                    atoms=None,
                    ndim=3,
-                   blocks=1):
+                   blocks=1,
+                   lattice=None):
   """Creates the MCMC step function.
 
   Args:
@@ -241,11 +242,19 @@ def make_mcmc_step(batch_network,
     ndim: Dimensionality of the system (usually 3).
     blocks: Number of blocks to split the updates into. If 1, use all-electron
       moves.
+    lattice: Shape (ndim, ndim). Lattice vectors for periodic boundary
+      conditions. If provided, walker positions are wrapped back to the primary
+      unit cell [0, L) after each set of MCMC steps to prevent numerical drift.
 
   Returns:
     Callable which performs the set of MCMC steps.
   """
   inner_fun = mh_block_update if blocks > 1 else mh_update
+
+  # Precompute inverse lattice for position wrapping
+  if lattice is not None:
+    lattice = jnp.asarray(lattice)
+    inv_lattice = jnp.linalg.inv(lattice)
 
   def mcmc_step(params, data, key, width):
     """Performs a set of MCMC steps.
@@ -281,6 +290,25 @@ def make_mcmc_step(batch_network,
     new_data, key, _, num_accepts = lax.fori_loop(
         0, nsteps, step_fn, (data, key, logprob, 0.0)
     )
+
+    # Wrap positions back to the primary unit cell [0, L) to prevent
+    # numerical drift in periodic boundary condition calculations.
+    # Since the wavefunction is exactly periodic, this does not change
+    # log|psi| or any physical observable.
+    if lattice is not None:
+      wrapped_pos = new_data.positions
+      # Reshape to (batch, nelectrons, lat_ndim), convert to fractional coords,
+      # apply modulo 1, convert back to Cartesian, reshape to flat.
+      lat_ndim = lattice.shape[0]
+      batch_size = wrapped_pos.shape[0]
+      pos_3d = jnp.reshape(wrapped_pos, [batch_size, -1, lat_ndim])
+      frac = jnp.einsum('ij,bej->bei', inv_lattice, pos_3d)
+      frac = frac % 1.0  # wrap to [0, 1)
+      pos_3d = jnp.einsum('ij,bej->bei', lattice, frac)
+      wrapped_pos = jnp.reshape(pos_3d, [batch_size, -1])
+      new_data = networks.FermiNetData(
+          **(dict(new_data) | {'positions': wrapped_pos}))
+
     pmove = jnp.sum(num_accepts) / (nsteps * batch_per_device)
     pmove = constants.pmean(pmove)
     return new_data, pmove
