@@ -150,6 +150,25 @@ def clip_local_values(
   return diff_center, diff
 
 
+def _per_lambda_baseline(local_energies: jnp.ndarray,
+                         interaction_strengths: jnp.ndarray) -> jnp.ndarray:
+  """Computes per-λ baseline: each walker's baseline is the mean E_L of its λ group.
+
+  In multi-λ training, using a global baseline creates O(1) systematic residuals
+  proportional to the inter-λ energy spread.  Per-λ baselines remove this,
+  leaving only within-group statistical fluctuations.
+
+  Falls back to global baseline when all walkers share the same λ.
+  """
+  # For each walker, average E_L over walkers with the same λ.
+  # (n_walkers,) x (n_walkers,) -> (n_walkers, n_walkers) boolean mask
+  same_lambda = jnp.abs(interaction_strengths[:, None]
+                         - interaction_strengths[None, :]) < 1e-6
+  group_sizes = jnp.sum(same_lambda, axis=1)
+  group_sums = jnp.dot(same_lambda.astype(local_energies.dtype), local_energies)
+  return group_sums / group_sizes
+
+
 def make_loss(network: networks.LogFermiNetLike,
               local_energy: hamiltonian.LocalEnergy,
               clip_local_energy: float = 0.0,
@@ -240,7 +259,10 @@ def make_loss(network: networks.LogFermiNetLike,
     params, key, data = primals
     loss, aux_data = total_energy(params, key, data)
 
+    data = primals[2]
+
     if clip_local_energy > 0.0:
+      # Clip outliers using global statistics (appropriate for outlier removal)
       aux_data.clipped_energy, diff = clip_local_values(
           aux_data.local_energy,
           loss,
@@ -248,14 +270,22 @@ def make_loss(network: networks.LogFermiNetLike,
           clip_from_median,
           center_at_clipped_energy,
           complex_output)
+      # Re-center diff with per-λ baselines to reduce gradient variance
+      # in multi-λ training. Reconstruct clipped E_L, compute per-λ means,
+      # and subtract. In single-λ this is equivalent to the global baseline.
+      clipped_el = diff + aux_data.clipped_energy
+      per_lambda_mean = _per_lambda_baseline(
+          clipped_el, data.interaction_strength)
+      diff = clipped_el - per_lambda_mean
     else:
-      diff = aux_data.local_energy - loss
+      per_lambda_mean = _per_lambda_baseline(
+          aux_data.local_energy, data.interaction_strength)
+      diff = aux_data.local_energy - per_lambda_mean
 
     # Due to the simultaneous requirements of KFAC (calling convention must be
     # (params, rng, data)) and Laplacian calculation (only want to take
     # Laplacian wrt electron positions) we need to change up the calling
     # convention between total_energy and batch_network
-    data = primals[2]
     data_tangents = tangents[2]
     primals = (primals[0], data.positions, data.spins, data.atoms, data.charges,
                data.interaction_strength)
