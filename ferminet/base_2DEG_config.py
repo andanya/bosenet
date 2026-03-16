@@ -37,6 +37,10 @@ def default() -> ml_collections.ConfigDict:
       'interaction_small_length_cutoff': 0.1,
       'interaction_truncation_limit': 5,
       'barrier_sharpness': 1.,
+      # Lattice type for periodic boundary conditions.
+      # 'square': standard square lattice (L * I_2)
+      # 'hexagonal': triangular real-space lattice giving hexagonal BZ
+      'lattice_type': 'square',
       # Config module used. Should be set in get_config function as either the
       # absolute module or relative to the configs subdirectory. Relative
       # imports must start with a '.' (e.g. .atom). Do *not* override on

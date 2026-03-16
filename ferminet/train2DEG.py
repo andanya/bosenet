@@ -769,6 +769,9 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
 
   # Main training
 
+  # Extract lattice for PBC (used by both MCMC reduction and local energy)
+  pbc_lattice = cfg.network.get('make_feature_layer_kwargs', {}).get(
+      'lattice', None)
 
   # MCMC
   # Construct MCMC step
@@ -778,7 +781,9 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
       device_batch_size,
       steps=cfg.mcmc.steps,
       atoms=atoms_to_mcmc,
+      ndim=cfg.system.ndim,
       blocks=cfg.mcmc.blocks * num_states,
+      lattice=pbc_lattice,
   )
   # Construct loss and optimizer
   laplacian_method = cfg.optim.get('laplacian', 'default')
@@ -802,8 +807,6 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         **cfg.system.make_local_energy_kwargs)
   else:
     pp_symbols = cfg.system.get('pp', {'symbols': None}).get('symbols')
-    # Extract lattice for periodic boundary conditions if present
-    pbc_lattice = cfg.network.get('make_feature_layer_kwargs', {}).get('lattice', None)
     local_energy_fn = hamiltonian.local_energy(   # HAMILTONIAN LOCAL ENERGY
         f=signed_network,
         charges=charges,

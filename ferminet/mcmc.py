@@ -217,12 +217,40 @@ def mh_block_update(
   return new_data, key, lp_new, num_accepts
 
 
+def _reduce_to_unit_cell(positions, lattice, ndim):
+  """Reduces walker positions to the first unit cell (centered at origin).
+
+  Maps all electron coordinates into the Wigner-Seitz cell [-0.5, 0.5) in
+  fractional coordinates.  Works for any lattice geometry (square, hexagonal,
+  etc.) because the reduction is done in fractional coordinates.
+
+  Args:
+    positions: shape (batch, nelectrons * ndim). Flat walker coordinates.
+    lattice: shape (ndim, ndim). Columns are the lattice vectors.
+    ndim: spatial dimensionality.
+
+  Returns:
+    Positions reduced to the first unit cell, same shape as input.
+  """
+  batch = positions.shape[0]
+  pos = jnp.reshape(positions, (batch, -1, ndim))
+  reciprocal = jnp.linalg.inv(lattice)
+  # Cartesian -> fractional
+  frac = jnp.einsum('ij,...j->...i', reciprocal, pos)
+  # Reduce to [-0.5, 0.5)
+  frac = (frac + 0.5) % 1.0 - 0.5
+  # Fractional -> Cartesian
+  pos = jnp.einsum('ij,...j->...i', lattice, frac)
+  return jnp.reshape(pos, (batch, -1))
+
+
 def make_mcmc_step(batch_network,
                    batch_per_device,
                    steps=10,
                    atoms=None,
                    ndim=3,
-                   blocks=1):
+                   blocks=1,
+                   lattice=None):
   """Creates the MCMC step function.
 
   Args:
@@ -238,6 +266,8 @@ def make_mcmc_step(batch_network,
     ndim: Dimensionality of the system (usually 3).
     blocks: Number of blocks to split the updates into. If 1, use all-electron
       moves.
+    lattice: Shape (ndim, ndim). If provided, walker positions are reduced to
+      the first unit cell after each batch of MCMC steps.
 
   Returns:
     Callable which performs the set of MCMC steps.
@@ -277,6 +307,12 @@ def make_mcmc_step(batch_network,
     new_data, key, _, num_accepts = lax.fori_loop(
         0, nsteps, step_fn, (data, key, logprob, 0.0)
     )
+    # Reduce walker positions to the first unit cell to prevent drift.
+    if lattice is not None:
+      reduced_pos = _reduce_to_unit_cell(
+          new_data.positions, jnp.asarray(lattice), ndim)
+      new_data = networks.FermiNetData(
+          **(dict(new_data) | {'positions': reduced_pos}))
     pmove = jnp.sum(num_accepts) / (nsteps * batch_per_device)
     pmove = constants.pmean(pmove)
     return new_data, pmove
