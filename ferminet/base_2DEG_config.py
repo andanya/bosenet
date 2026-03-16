@@ -265,6 +265,14 @@ def default() -> ml_collections.ConfigDict:
               'mlp_hidden_dims': (256,),
               'use_layer_norm': True,
           },
+          # Lambda conditioning options for generative (multi-lambda) training.
+          'lambda_conditioning': {
+              # 'additive': x + tanh(Linear(p_lambda))
+              # 'film': gamma(p_lambda) * x + beta(p_lambda)
+              'mode': 'additive',
+              # If True, feed log(lambda) to the embedding MLP.
+              'log_scale_input': False,
+          },
           # Config common to all architectures.
           'determinants': 16,  # Number of determinants.
           'bias_orbitals': False,  # include bias in last layer to orbitals

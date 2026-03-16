@@ -45,6 +45,10 @@ class PsiformerOptions(networks.BaseNetworkOptions):
   heads_dim: int = 64
   mlp_hidden_dims: Tuple[int, ...] = (256,)
   use_layer_norm: bool = False
+  # Lambda conditioning: 'additive' or 'film'
+  lambda_conditioning_mode: str = 'additive'
+  # If True, feed log(lambda) to the embedding MLP
+  lambda_log_scale_input: bool = False
 
 
 def make_layer_norm() ->...:
@@ -253,35 +257,51 @@ def make_lambda_embedding(attn_dim: int, hidden_dim: int = 64) -> ...:
   return init, apply
 
 
-def make_cross_attention(attn_dim: int) -> ...:
+def make_cross_attention(attn_dim: int, mode: str = 'additive') -> ...:
   """Cross-attention that injects the parameter token into site tokens.
 
-  With a single key-value token, multi-head attention degenerates to a
-  learned bias that is broadcast to all site tokens. We implement this
-  as a two-layer linear map: p_lambda -> tanh -> Linear -> bias.
-  The result is added to every site token (residual connection).
+  Args:
+    attn_dim: dimension of site tokens.
+    mode: 'additive' — x + tanh(Linear(p_lambda))
+          'film' — gamma(p_lambda) * x + beta(p_lambda)  (FiLM conditioning)
   """
   def init(key: chex.PRNGKey) -> networks.ParamTree:
     params = {}
-    key, subkey = jax.random.split(key)
-    params['project'] = network_blocks.init_linear_layer(
-        subkey, in_dim=attn_dim, out_dim=attn_dim, include_bias=True)
+    if mode == 'film':
+      key, subkey = jax.random.split(key)
+      params['gamma'] = network_blocks.init_linear_layer(
+          subkey, in_dim=attn_dim, out_dim=attn_dim, include_bias=True)
+      key, subkey = jax.random.split(key)
+      params['beta'] = network_blocks.init_linear_layer(
+          subkey, in_dim=attn_dim, out_dim=attn_dim, include_bias=True)
+    else:
+      key, subkey = jax.random.split(key)
+      params['project'] = network_blocks.init_linear_layer(
+          subkey, in_dim=attn_dim, out_dim=attn_dim, include_bias=True)
     return params
 
   def apply(params: networks.ParamTree,
             x: jnp.ndarray,
             p_lambda: jnp.ndarray) -> jnp.ndarray:
-    """Adds lambda-dependent bias to all site tokens.
+    """Injects lambda-dependent modulation into all site tokens.
 
     Args:
       x: site tokens, shape (nelectrons, attn_dim).
       p_lambda: parameter token, shape (attn_dim,).
 
     Returns:
-      x + broadcast(f(p_lambda)), shape (nelectrons, attn_dim).
+      Modulated site tokens, shape (nelectrons, attn_dim).
     """
-    ca_bias = jnp.tanh(network_blocks.linear_layer(p_lambda, **params['project']))
-    return x + ca_bias  # broadcast (attn_dim,) to (nelectrons, attn_dim)
+    if mode == 'film':
+      gamma = 1.0 + jnp.tanh(network_blocks.linear_layer(
+          p_lambda, **params['gamma']))
+      beta = jnp.tanh(network_blocks.linear_layer(
+          p_lambda, **params['beta']))
+      return gamma * x + beta  # broadcast to (nelectrons, attn_dim)
+    else:
+      ca_bias = jnp.tanh(network_blocks.linear_layer(
+          p_lambda, **params['project']))
+      return x + ca_bias  # broadcast to (nelectrons, attn_dim)
 
   return init, apply
 
@@ -323,8 +343,10 @@ def make_psiformer_layers(
   mlp_init, mlp_apply = make_mlp()
 
   # Lambda conditioning modules (shared embedding, per-layer CA).
+  log_scale = options.lambda_log_scale_input
   lambda_embed_init, lambda_embed_apply = make_lambda_embedding(attn_dim)
-  cross_attn_init, cross_attn_apply = make_cross_attention(attn_dim)
+  cross_attn_init, cross_attn_apply = make_cross_attention(
+      attn_dim, mode=options.lambda_conditioning_mode)
 
   def init(key: chex.PRNGKey) -> Tuple[int, networks.ParamTree]:
     """Returns tuple of output dimension from the final layer and parameters."""
@@ -413,7 +435,10 @@ def make_psiformer_layers(
     x = jnp.dot(features, params['embed'])
 
     # Embed scalar lambda into a parameter token (shared across layers).
-    p_lambda = lambda_embed_apply(params['lambda_embed'], interaction_strength)
+    lam = interaction_strength
+    if log_scale:
+      lam = jnp.log(jnp.maximum(lam, 1e-8))
+    p_lambda = lambda_embed_apply(params['lambda_embed'], lam)
 
     # ── Per-layer: SA -> CA(lambda) ──
     for layer in range(num_layers):
@@ -459,6 +484,8 @@ def make_fermi_net(
     use_layer_norm: bool,
     predict_logits: bool = False,
     boson_head: str = 'product',
+    lambda_conditioning_mode: str = 'additive',
+    lambda_log_scale_input: bool = False,
 ) -> networks.Network:
   """Psiformer with stacked Self Attention layers and lambda conditioning.
 
@@ -524,6 +551,8 @@ def make_fermi_net(
       use_layer_norm=use_layer_norm,
       predict_logits=predict_logits,
       boson_head=boson_head,
+      lambda_conditioning_mode=lambda_conditioning_mode,
+      lambda_log_scale_input=lambda_log_scale_input,
   )  # pytype: disable=wrong-keyword-args
 
   psiformer_layers = make_psiformer_layers(nspins, charges.shape[0], options)

@@ -556,6 +556,10 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         complex_output=use_complex,
         predict_logits=cfg.network.get('predict_logits', False),
         boson_head=cfg.network.get('boson_head', 'product'),
+        lambda_conditioning_mode=cfg.network.get(
+            'lambda_conditioning', {}).get('mode', 'additive'),
+        lambda_log_scale_input=cfg.network.get(
+            'lambda_conditioning', {}).get('log_scale_input', False),
         **cfg.network.psiformer,
     )
   key, subkey = jax.random.split(key)
