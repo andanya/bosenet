@@ -3,7 +3,7 @@
 #SBATCH --partition=gpu
 #SBATCH --gpus=a100:1
 #SBATCH --time=24:00:00
-#SBATCH --mem=40G
+#SBATCH --mem=70G
 #SBATCH --output=./andanya-psiformer-jobs/andanya-psiformer-job_%j.out
 #SBATCH --error=./andanya-psiformer-jobs/andanya-psiformer-job_%j.err
 #SBATCH --exclude=r818u03n09,r818u09n09
