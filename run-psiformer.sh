@@ -7,6 +7,7 @@
 #SBATCH --output=./andanya-psiformer-jobs/andanya-psiformer-job_%j.out
 #SBATCH --error=./andanya-psiformer-jobs/andanya-psiformer-job_%j.err
 #SBATCH --exclude=r818u03n09
+#SBATCH --no-requeue
 
 module load CUDA
 module load cuDNN
