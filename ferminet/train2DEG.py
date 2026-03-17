@@ -555,6 +555,7 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         rescale_inputs=cfg.network.get('rescale_inputs', False),
         complex_output=use_complex,
         predict_logits=cfg.network.get('predict_logits', False),
+        boson_head=cfg.network.get('boson_head', 'product'),
         **cfg.network.psiformer,
     )
   key, subkey = jax.random.split(key)
