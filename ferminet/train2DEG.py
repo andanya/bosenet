@@ -1172,6 +1172,11 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         checkpoint.save(ckpt_save_path, t, data, params, opt_state, mcmc_width)
         time_of_last_ckpt = time.time()
 
+    # Save final checkpoint so multi-phase training can hand off cleanly.
+    if t_init < cfg.optim.iterations:
+      checkpoint.save(ckpt_save_path, cfg.optim.iterations, data, params,
+                      opt_state, mcmc_width)
+
     # Shut down logging at end
     if cfg.system.states:
       energy_matrix_file.close()
