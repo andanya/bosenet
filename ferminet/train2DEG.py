@@ -650,24 +650,25 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
      mcmc_width_ckpt,
      density_state_ckpt) = checkpoint.restore(
          ckpt_restore_filename, host_batch_size)
-    # Backward compatibility: add interaction_strength if not in checkpoint
-    if not hasattr(data, 'interaction_strength') or data.interaction_strength is None:
-      training_set = cfg.get('interaction_strength_training_set', None)
-      if training_set:
-        training_set = list(training_set)
-        num_lambdas = len(training_set)
-        walker_lambdas = jnp.array(
-            [training_set[i % num_lambdas] for i in range(device_batch_size)],
-            dtype=jnp.float32)
-      else:
-        walker_lambdas = jnp.full(
-            (device_batch_size,), cfg.interaction_strength, dtype=jnp.float32)
-      batch_interaction_strength = kfac_jax.utils.replicate_all_local_devices(
-          walker_lambdas)
-      data = networks.FermiNetData(
-          positions=data.positions, spins=data.spins,
-          atoms=data.atoms, charges=data.charges,
-          interaction_strength=batch_interaction_strength)
+    # Set interaction_strength from config, overriding whatever was in the
+    # checkpoint.  This is essential for single-lambda inference from a
+    # multi-lambda (generative) checkpoint.
+    training_set = cfg.get('interaction_strength_training_set', None)
+    if training_set:
+      training_set = list(training_set)
+      num_lambdas = len(training_set)
+      walker_lambdas = jnp.array(
+          [training_set[i % num_lambdas] for i in range(device_batch_size)],
+          dtype=jnp.float32)
+    else:
+      walker_lambdas = jnp.full(
+          (device_batch_size,), cfg.interaction_strength, dtype=jnp.float32)
+    batch_interaction_strength = kfac_jax.utils.replicate_all_local_devices(
+        walker_lambdas)
+    data = networks.FermiNetData(
+        positions=data.positions, spins=data.spins,
+        atoms=data.atoms, charges=data.charges,
+        interaction_strength=batch_interaction_strength)
   else:
     logging.info('No checkpoint found. Training new model.')
     key, subkey = jax.random.split(key)
