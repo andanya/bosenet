@@ -6,6 +6,29 @@ import enum
 
 import ml_collections
 from ml_collections import config_dict
+import numpy as np
+
+
+def make_lattice(lattice_type: str, length: float, ndim: int = 2) -> np.ndarray:
+  """Returns real-space lattice vectors (as columns) for the requested lattice.
+
+  Args:
+    lattice_type: One of:
+      'square'    - L * I_ndim (standard cubic/square lattice).
+      'hexagonal' - 2D triangular real-space lattice (giving a hexagonal BZ).
+                    Both primitive vectors have length `length`. Only ndim=2.
+    length: lattice constant.
+    ndim: spatial dimensionality.
+  """
+  if lattice_type == 'square':
+    return length * np.eye(ndim)
+  if lattice_type == 'hexagonal':
+    if ndim != 2:
+      raise ValueError('hexagonal lattice is only defined for ndim=2')
+    # Two primitive vectors at 60 degrees, both of length `length`.
+    return length * np.array([[1.0, 0.5],
+                              [0.0, np.sqrt(3.0) / 2.0]])
+  raise ValueError(f'Unknown lattice_type: {lattice_type}')
 
 
 class SystemType(enum.IntEnum):
@@ -38,6 +61,12 @@ def default() -> ml_collections.ConfigDict:
       'interaction_small_length_cutoff': 0.1,
       'interaction_truncation_limit': 5,
       'barrier_sharpness': 1.,
+      # Lattice type for periodic boundary conditions. Used by helper
+      # `make_lattice` to construct the lattice matrix passed to the PBC
+      # feature layer / local energy. One of:
+      #   'square'    - standard square lattice (L * I_ndim).
+      #   'hexagonal' - 2D triangular real-space lattice (hexagonal BZ).
+      'lattice_type': 'square',
       # Config module used. Should be set in get_config function as either the
       # absolute module or relative to the configs subdirectory. Relative
       # imports must start with a '.' (e.g. .atom). Do *not* override on
