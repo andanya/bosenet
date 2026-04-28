@@ -34,6 +34,20 @@ from typing_extensions import Protocol
 Array = Union[jnp.ndarray, np.ndarray]
 
 
+@chex.dataclass
+class LocalEnergyAux:
+  """Auxiliary outputs from a local-energy evaluation.
+
+  Attributes:
+    kinetic: per-configuration local kinetic energy (scalar).
+    potential: per-configuration local potential energy (scalar).
+    energy_mat: for excited states, the local energy matrix; otherwise None.
+  """
+  kinetic: jax.Array
+  potential: jax.Array
+  energy_mat: Optional[jax.Array] = None
+
+
 class LocalEnergy(Protocol):
 
   def __call__(
@@ -41,7 +55,7 @@ class LocalEnergy(Protocol):
       params: networks.ParamTree,
       key: chex.PRNGKey,
       data: networks.FermiNetData,
-  ) -> Tuple[jnp.ndarray, Optional[jnp.ndarray]]:
+  ) -> Tuple[jnp.ndarray, LocalEnergyAux]:
     """Returns the local energy of a Hamiltonian at a configuration.
 
     Args:
@@ -475,13 +489,8 @@ def local_energy(
 
   def _e_l(
       params: networks.ParamTree, key: chex.PRNGKey, data: networks.FermiNetData
-  ) -> Tuple[jnp.ndarray, Optional[jnp.ndarray]]:
-    """Returns the total energy.
-
-    Args:
-      params: network parameters.
-      key: RNG state.
-      data: MCMC configuration.
+  ) -> Tuple[jnp.ndarray, LocalEnergyAux]:
+    """Returns the total energy and per-configuration kinetic/potential split.
     """
     if states:
       # Compute features
@@ -537,6 +546,8 @@ def local_energy(
                                log_out.jacobian.dense_array, axis=-2)
         total_energy = jnp.diag(kin) + pot_spectrum[:, 0]
         energy_mat = None
+        kinetic_scalar = jnp.sum(jnp.diag(kin))
+        potential_scalar = jnp.sum(pot_spectrum[:, 0])
       else:
         # Compute kinetic energy and matrix of states
         ke = excited_kinetic_energy_matrix(
@@ -545,6 +556,9 @@ def local_energy(
         hpsi_mat = kin_mat + psi_mat * pot_spectrum
         energy_mat = jnp.linalg.solve(psi_mat, hpsi_mat)
         total_energy = jnp.trace(energy_mat)
+        kin_per_state = jnp.linalg.solve(psi_mat, kin_mat)
+        kinetic_scalar = jnp.trace(kin_per_state)
+        potential_scalar = total_energy - kinetic_scalar
     else:
       ke = local_kinetic_energy(f,
                                 use_scan=use_scan,
@@ -574,6 +588,12 @@ def local_energy(
       kinetic = ke(params, data)
       total_energy = potential + kinetic
       energy_mat = None  # Not necessary for ground state
-    return total_energy, energy_mat
+      kinetic_scalar = kinetic
+      potential_scalar = potential
+    return total_energy, LocalEnergyAux(
+        kinetic=kinetic_scalar,
+        potential=potential_scalar,
+        energy_mat=energy_mat,
+    )
 
   return _e_l

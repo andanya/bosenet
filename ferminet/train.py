@@ -614,6 +614,10 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
 
   # Set up logging and observables
   train_schema = ['step', 'energy', 'ewmean', 'ewvar', 'pmove']
+  # During inference (no optimizer), also log kinetic and potential energies.
+  is_inference_run = (cfg.optim.optimizer == 'none')
+  if is_inference_run:
+    train_schema += ['kinetic', 'potential']
 
   if cfg.system.states:
     energy_matrix_file = open(
@@ -1005,6 +1009,9 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
             'ewvar': np.asarray(weighted_stats.variance),
             'pmove': np.asarray(pmove),
         }
+        if is_inference_run and aux_data.kinetic_energy is not None:
+          writer_kwargs['kinetic'] = np.asarray(aux_data.kinetic_energy[0])
+          writer_kwargs['potential'] = np.asarray(aux_data.potential_energy[0])
         for key in observable_data:
           obs_data = observable_data[key]
           if cfg.system.states:

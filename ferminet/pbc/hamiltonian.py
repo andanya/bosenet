@@ -212,6 +212,7 @@ def local_energy(
         data.positions, data.atoms)
     potential = potential_energy(ae, ee)
     kinetic = ke(params, data)
-    return potential + kinetic, None
+    return potential + kinetic, hamiltonian.LocalEnergyAux(
+        kinetic=kinetic, potential=potential, energy_mat=None)
 
   return _e_l

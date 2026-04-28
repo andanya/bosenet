@@ -37,6 +37,10 @@ class AuxiliaryLossData:
     variance: mean variance over batch, and over all devices if inside a pmap.
     local_energy: local energy for each MCMC configuration.
     clipped_energy: local energy after clipping has been applied
+    kinetic_energy: mean local kinetic energy over batch and devices.
+    potential_energy: mean local potential energy over batch and devices.
+    local_kinetic: local kinetic energy for each MCMC configuration.
+    local_potential: local potential energy for each MCMC configuration.
     grad_local_energy: gradient of the local energy.
     local_energy_mat: for excited states, the local energy matrix.
     s_ij: Matrix of overlaps between wavefunctions.
@@ -46,6 +50,10 @@ class AuxiliaryLossData:
   variance: jax.Array
   local_energy: jax.Array
   clipped_energy: jax.Array
+  kinetic_energy: jax.Array | None = None
+  potential_energy: jax.Array | None = None
+  local_kinetic: jax.Array | None = None
+  local_potential: jax.Array | None = None
   grad_local_energy: jax.Array | None = None
   local_energy_mat: jax.Array | None = None
   s_ij: jax.Array | None = None
@@ -213,7 +221,7 @@ def make_loss(network: networks.LogFermiNetLike,
           networks.FermiNetData(positions=0, spins=0, atoms=0, charges=0,
                                 interaction_strength=0),
       ),
-      out_axes=(0, 0)
+      out_axes=0
   )
   batch_network = vmap(network, in_axes=(None, 0, 0, 0, 0, 0), out_axes=0)
 
@@ -241,16 +249,22 @@ def make_loss(network: networks.LogFermiNetLike,
       over the batch and over all devices inside a pmap.
     """
     keys = jax.random.split(key, num=data.positions.shape[0])
-    e_l, e_l_mat = batch_local_energy(params, keys, data)
+    e_l, e_aux = batch_local_energy(params, keys, data)
     loss = constants.pmean(jnp.mean(e_l))
     loss_diff = e_l - loss
     variance = constants.pmean(jnp.mean(loss_diff * jnp.conj(loss_diff)))
+    kin_mean = constants.pmean(jnp.mean(e_aux.kinetic))
+    pot_mean = constants.pmean(jnp.mean(e_aux.potential))
     return loss, AuxiliaryLossData(
         energy=loss,
         variance=variance.real,
         local_energy=e_l,
         clipped_energy=e_l,
-        local_energy_mat=e_l_mat,
+        kinetic_energy=kin_mean.real,
+        potential_energy=pot_mean.real,
+        local_kinetic=e_aux.kinetic,
+        local_potential=e_aux.potential,
+        local_energy_mat=e_aux.energy_mat,
     )
 
   @total_energy.defjvp
@@ -367,7 +381,7 @@ def make_wqmc_loss(
           networks.FermiNetData(positions=0, spins=0, atoms=0, charges=0,
                                 interaction_strength=0),
       ),
-      out_axes=(0, 0)
+      out_axes=0
   )
   batch_network = vmap(network, in_axes=(None, 0, 0, 0, 0, 0), out_axes=0)
 
@@ -395,10 +409,12 @@ def make_wqmc_loss(
       over the batch and over all devices inside a pmap.
     """
     keys = jax.random.split(key, num=data.positions.shape[0])
-    e_l, e_l_mat = batch_local_energy(params, keys, data)
+    e_l, e_aux = batch_local_energy(params, keys, data)
     loss = constants.pmean(jnp.mean(e_l))
     loss_diff = e_l - loss
     variance = constants.pmean(jnp.mean(loss_diff * jnp.conj(loss_diff)))
+    kin_mean = constants.pmean(jnp.mean(e_aux.kinetic))
+    pot_mean = constants.pmean(jnp.mean(e_aux.potential))
 
     def batch_local_energy_pos(pos):
       network_data = networks.FermiNetData(
@@ -417,8 +433,12 @@ def make_wqmc_loss(
         variance=variance.real,
         local_energy=e_l,
         clipped_energy=e_l,
+        kinetic_energy=kin_mean.real,
+        potential_energy=pot_mean.real,
+        local_kinetic=e_aux.kinetic,
+        local_potential=e_aux.potential,
         grad_local_energy=grad_e_l,
-        local_energy_mat=e_l_mat,
+        local_energy_mat=e_aux.energy_mat,
     )
 
   @total_energy.defjvp
@@ -525,7 +545,7 @@ def make_energy_overlap_loss(network: networks.LogFermiNetLike,
   data_axes = networks.FermiNetData(positions=0, spins=0, atoms=0, charges=0,
                                     interaction_strength=0)
   batch_local_energy = vmap(
-      local_energy, in_axes=(None, 0, data_axes), out_axes=(0, 0))
+      local_energy, in_axes=(None, 0, data_axes), out_axes=0)
   batch_network = vmap(network, in_axes=(None, 0, 0, 0, 0, 0), out_axes=0)
   overlap_weight = jnp.array(overlap_weight)
 
@@ -540,12 +560,14 @@ def make_energy_overlap_loss(network: networks.LogFermiNetLike,
 
     # Energy term. Largely similar to make_energy_loss, but simplified.
     keys = jax.random.split(key, num=data.positions.shape[0])
-    e_l, _ = batch_local_energy(params, keys, data)
+    e_l, e_aux = batch_local_energy(params, keys, data)
     loss = constants.pmean(jnp.mean(e_l, axis=0))
     loss_diff = e_l - loss
     variance = constants.pmean(
         jnp.mean(loss_diff * jnp.conj(loss_diff), axis=0))
     weighted_energy = jnp.dot(loss, overlap_weight)
+    kin_mean = constants.pmean(jnp.mean(e_aux.kinetic))
+    pot_mean = constants.pmean(jnp.mean(e_aux.potential))
 
     # Overlap matrix. To compute S_ij^2 = <psi_i psi_j>^2/<psi_i^2><psi_j^2>
     # by Monte Carlo, you can split up the terms into a product of MC estimates
@@ -573,9 +595,13 @@ def make_energy_overlap_loss(network: networks.LogFermiNetLike,
                 variance=variance.real,
                 local_energy=e_l,
                 clipped_energy=loss,
+                kinetic_energy=kin_mean.real,
+                potential_energy=pot_mean.real,
+                local_kinetic=e_aux.kinetic,
+                local_potential=e_aux.potential,
                 s_ij=s_ij_local,
                 mean_s_ij=s_ij,
-                local_energy_mat=e_l))
+                local_energy_mat=e_aux.energy_mat))
 
   @total_energy_and_overlap.defjvp
   def total_energy_and_overlap_jvp(primals, tangents):  # pylint: disable=unused-variable
