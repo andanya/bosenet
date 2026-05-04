@@ -19,4 +19,8 @@ LAM=${LAMBDAS[$SLURM_ARRAY_TASK_ID]}
 
 echo "Task $SLURM_ARRAY_TASK_ID: lambda = $LAM"
 
+# Skip XLA gemm-fusion autotune; the single-threaded compile takes >1h and
+# trips the YCRC GPU watchdog (jobs 10301620/10301846, Apr 30 – May 1 2026).
+export XLA_FLAGS="--xla_gpu_autotune_level=0"
+
 python infer-dipole-10e-pbc.py $LAM

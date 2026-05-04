@@ -1,18 +1,17 @@
 #!/bin/bash
 #SBATCH --job-name=andanya-psiformer
-#SBATCH --partition=gpu
-#SBATCH --gpus=1
-#SBATCH --time=12:00:00
-#SBATCH --mem=16G
+#SBATCH --partition=gpu_h200
+#SBATCH --gpus=h200:1
+#SBATCH --time=24:00:00
+#SBATCH --mem=140G
 #SBATCH --output=./andanya-psiformer-jobs/andanya-psiformer-job_%j.out
 #SBATCH --error=./andanya-psiformer-jobs/andanya-psiformer-job_%j.err
-#SBATCH --exclude=r818u03n09,r818u09n09
 #SBATCH --no-requeue
 
-module load CUDA
-module load cuDNN
-
 cd /home/da753/bosenet
+
+source ~/.bashrc
+conda activate ferminet-jax
 
 while true; do
   echo "=== GPU MEM $(date '+%H:%M:%S') ==="
