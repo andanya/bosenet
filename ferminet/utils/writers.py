@@ -70,6 +70,11 @@ class Writer(contextlib.AbstractContextManager):
 
     # write the data to csv
     self._file.write(','.join(row) + '\n')
+    # Flush every row so train_stats.csv is durable on disk against signal-kill
+    # (Slurm time limit, watchdog, OOM). Without this, on Yale GPFS the default
+    # buffer is ~1MB (= ~20k iters at 50 bytes/row), so a job killed before the
+    # next flush loses the in-buffer data — see jobs 10796596/10796597 May 2026.
+    self._file.flush()
 
     # write the data to abseil logs
     if self._log:
