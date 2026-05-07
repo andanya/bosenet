@@ -286,13 +286,30 @@ def default() -> ml_collections.ConfigDict:
               'schnet_electron_nuclear_convolutions': (),
           },
           # Only used if network_type is 'psiformer'.
+          # CustomPsiformer (Geier et al., PRB 112 045119 (2025)) decoupled
+          # attention/value/token dimensions:
+          #   - mlp_dim is the token (embedding) dimension throughout.
+          #   - attn_dim is the per-head Q/K dim; value_dim is the per-head V
+          #     dim (independent of attn_dim and mlp_dim).
+          #   - The per-layer MLP is num_perceptrons_per_layer stacked
+          #     mlp_dim -> mlp_dim dense layers, each with mlp_activation_fct.
           'psiformer': {
-              # PsiFormer architecture: von Glehn, Spencer, Pfau, ICLR 2023.
               'num_layers': 4,
               'num_heads': 4,
-              'heads_dim': 64,
-              'mlp_hidden_dims': (256,),
+              # PeriodicWave-style small configuration (default):
+              'attn_dim': 16,
+              'value_dim': 16,
+              'mlp_dim': 64,
+              'num_perceptrons_per_layer': 2,
+              # Closest to the previous Psiformer (heads_dim=64, 256-wide MLP).
+              # Uncomment to recover ~the previous parameter count:
+              # 'attn_dim': 64,
+              # 'value_dim': 64,
+              # 'mlp_dim': 256,
+              # 'num_perceptrons_per_layer': 2,
               'use_layer_norm': True,
+              # One of 'TANH', 'ELU', 'GELU'.
+              'mlp_activation_fct': 'TANH',
           },
           # Lambda conditioning options for generative (multi-lambda) training.
           'lambda_conditioning': {

@@ -31,23 +31,35 @@ import numpy as np
 class PsiformerOptions(networks.BaseNetworkOptions):
   """Options controlling the Psiformer part of the network architecture.
 
+  PeriodicWave CustomPsiformer style (decoupled attention / value / token dims):
+  the token (embedding) dimension is `mlp_dim`. Attention Q/K project to
+  `num_heads * attn_dim`; values project to `num_heads * value_dim`; the
+  attention output is projected back to `mlp_dim`. The per-layer MLP is a
+  stack of `num_perceptrons_per_layer` perceptrons, each `mlp_dim -> mlp_dim`.
+
   Attributes:
     num_layers: Number of self-attention layers.
     num_heads: Number of multihead self-attention heads.
-    heads_dim: Embedding dimension for each self-attention head.
-    mlp_hidden_dims: Tuple of sizes of hidden dimension of the MLP. Note that
-      this does not include the final projection to the embedding dimension.
+    attn_dim: Per-head Q/K dimension.
+    value_dim: Per-head V dimension.
+    mlp_dim: Token (embedding) dimension and MLP width.
+    num_perceptrons_per_layer: Number of stacked dense layers in each per-layer
+      MLP block.
     use_layer_norm: If true, include a layer norm on both attention and MLP.
+    mlp_activation_fct: One of 'TANH', 'ELU', 'GELU'.
+    lambda_conditioning_mode: 'additive' or 'film'.
+    lambda_log_scale_input: If True, feed log(lambda) to the embedding MLP.
   """
 
   num_layers: int = 2
   num_heads: int = 4
-  heads_dim: int = 64
-  mlp_hidden_dims: Tuple[int, ...] = (256,)
+  attn_dim: int = 16
+  value_dim: int = 16
+  mlp_dim: int = 64
+  num_perceptrons_per_layer: int = 2
   use_layer_norm: bool = False
-  # Lambda conditioning: 'additive' or 'film'
+  mlp_activation_fct: str = 'TANH'
   lambda_conditioning_mode: str = 'additive'
-  # If True, feed log(lambda) to the embedding MLP
   lambda_log_scale_input: bool = False
 
 
@@ -72,99 +84,88 @@ def make_layer_norm() ->...:
   return init, apply
 
 
-def make_multi_head_attention(num_heads: int, heads_dim: int) ->...:
-  """FermiNet-style version of MultiHeadAttention."""
+def make_multi_head_attention(num_heads: int,
+                              embed_dim: int,
+                              attn_dim: int,
+                              value_dim: int) ->...:
+  """Multi-head self-attention with decoupled Q/K/V dimensions.
 
-  # Linear layer plus reshape final dimensions to num_heads, heads_dim.
-  def linear_projection(x: jnp.ndarray, weights: jnp.ndarray) -> jnp.ndarray:
-    y = jnp.dot(x, weights)
-    return y.reshape(*x.shape[:-1], num_heads, heads_dim)
+  Q,K project to (num_heads * attn_dim); V projects to (num_heads * value_dim);
+  the per-head attention output (num_heads * value_dim) is projected back to
+  embed_dim.
+  """
 
-  def init(key: chex.PRNGKey,
-           q_d: int,
-           kv_d: int,
-           output_channels: Optional[int] = None) -> Mapping[str, jnp.ndarray]:
-
-    # Dimension of attention projection.
-    qkv_hiddens = num_heads * heads_dim
-    if not output_channels:
-      output_channels = qkv_hiddens
-
-    key, *subkeys = jax.random.split(key, num=4)
+  def init(key: chex.PRNGKey) -> Mapping[str, jnp.ndarray]:
+    key, *subkeys = jax.random.split(key, num=5)
     params = {}
     params['q_w'] = network_blocks.init_linear_layer(
-        subkeys[0], in_dim=q_d, out_dim=qkv_hiddens, include_bias=False)['w']
-    params['k_w'] = network_blocks.init_linear_layer(
-        subkeys[1], in_dim=kv_d, out_dim=qkv_hiddens, include_bias=False)['w']
-    params['v_w'] = network_blocks.init_linear_layer(
-        subkeys[2], in_dim=kv_d, out_dim=qkv_hiddens, include_bias=False)['w']
-
-    key, subkey = jax.random.split(key)
-    params['attn_output'] = network_blocks.init_linear_layer(
-        subkey, in_dim=qkv_hiddens, out_dim=output_channels,
+        subkeys[0], in_dim=embed_dim, out_dim=num_heads * attn_dim,
         include_bias=False)['w']
-
+    params['k_w'] = network_blocks.init_linear_layer(
+        subkeys[1], in_dim=embed_dim, out_dim=num_heads * attn_dim,
+        include_bias=False)['w']
+    params['v_w'] = network_blocks.init_linear_layer(
+        subkeys[2], in_dim=embed_dim, out_dim=num_heads * value_dim,
+        include_bias=False)['w']
+    params['attn_output'] = network_blocks.init_linear_layer(
+        subkeys[3], in_dim=num_heads * value_dim, out_dim=embed_dim,
+        include_bias=False)['w']
     return params
 
-  def apply(params: networks.ParamTree, query: jnp.ndarray, key: jnp.ndarray,
-            value: jnp.ndarray) -> jnp.ndarray:
-    """Computes MultiHeadAttention with keys, queries and values.
+  def apply(params: networks.ParamTree, x: jnp.ndarray) -> jnp.ndarray:
+    """Self-attention.
 
     Args:
-      params: Parameters for attention embeddings.
-      query: Shape [..., q_index_dim, q_d]
-      key: Shape [..., kv_index_dim, kv_d]
-      value: Shape [..., kv_index_dim, kv_d]
+      params: attention parameters.
+      x: site tokens, shape [..., seq, embed_dim].
 
     Returns:
-      A projection of attention-weighted value projections.
-      Shape [..., q_index_dim, output_channels]
+      Attention output, shape [..., seq, embed_dim].
     """
+    leading = x.shape[:-1]
+    q = jnp.dot(x, params['q_w']).reshape(*leading, num_heads, attn_dim)
+    k = jnp.dot(x, params['k_w']).reshape(*leading, num_heads, attn_dim)
+    v = jnp.dot(x, params['v_w']).reshape(*leading, num_heads, value_dim)
 
-    # Projections for q, k, v.
-    # Output shape: [..., index_dim, num_heads, heads_dim].
-    q = linear_projection(query, params['q_w'])
-    k = linear_projection(key, params['k_w'])
-    v = linear_projection(value, params['v_w'])
-
-    # Scaled dot-product attention. The operation applies 1/√d_k automatically.
-    # This jax function implements GPU-optimized Flash attention automatically.
+    # Scaled dot-product attention (GPU-optimized Flash attention).
     attn = jax.nn.dot_product_attention(q, k, v)
-
-    # Concatenate attention matrix of all heads into a single vector.
-    # Shape [..., q_index_dim, num_heads * heads_dim]
-    attn = jnp.reshape(attn, (*query.shape[:-1], -1))
-
-    # Apply a final projection to get the final embeddings.
-    # Output shape: [..., q_index_dim, output_channels]
+    attn = attn.reshape(*leading, num_heads * value_dim)
     return network_blocks.linear_layer(attn, params['attn_output'])
 
   return init, apply
 
 
-def make_mlp() ->...:
-  """Construct MLP, with final linear projection to embedding size."""
+_MLP_ACTIVATIONS = {
+    'TANH': jnp.tanh,
+    'ELU': jax.nn.elu,
+    'GELU': jax.nn.gelu,
+}
 
-  def init(key: chex.PRNGKey, mlp_hidden_dims: Tuple[int, ...],
-           embed_dim: int) -> Sequence[networks.Param]:
+
+def make_mlp(num_perceptrons_per_layer: int = 2,
+             activation_fct_name: str = 'TANH') ->...:
+  """Fixed-width MLP block with selectable activation.
+
+  Each of the num_perceptrons_per_layer dense layers maps mlp_dim -> mlp_dim
+  and applies the activation. The block is wrapped with a residual connection
+  by the caller.
+  """
+  activation_fct = _MLP_ACTIVATIONS[activation_fct_name.upper()]
+
+  def init(key: chex.PRNGKey, mlp_dim: int) -> Sequence[networks.Param]:
     params = []
-    dims_one_in = [embed_dim, *mlp_hidden_dims]
-    dims_one_out = [*mlp_hidden_dims, embed_dim]
-    for i in range(len(dims_one_in)):
+    for _ in range(num_perceptrons_per_layer):
       key, subkey = jax.random.split(key)
       params.append(
           network_blocks.init_linear_layer(
-              subkey,
-              in_dim=dims_one_in[i],
-              out_dim=dims_one_out[i],
-              include_bias=True))
+              subkey, in_dim=mlp_dim, out_dim=mlp_dim, include_bias=True))
     return params
 
   def apply(params: Sequence[networks.Param],
             inputs: jnp.ndarray) -> jnp.ndarray:
     x = inputs
-    for i in range(len(params)):
-      x = jnp.tanh(network_blocks.linear_layer(x, **params[i]))
+    for p in params:
+      x = activation_fct(network_blocks.linear_layer(x, **p))
     return x
 
   return init, apply
@@ -332,21 +333,28 @@ def make_psiformer_layers(
   """
   del nspins, natoms  # Unused.
 
-  attn_dim = options.num_heads * options.heads_dim
+  mlp_dim = options.mlp_dim
   num_layers = options.num_layers
 
   # Per-layer self-attention components.
   attention_init, attention_apply = make_multi_head_attention(
-      options.num_heads, options.heads_dim)
+      num_heads=options.num_heads,
+      embed_dim=mlp_dim,
+      attn_dim=options.attn_dim,
+      value_dim=options.value_dim,
+  )
   if options.use_layer_norm:
     layer_norm_init, layer_norm_apply = make_layer_norm()
-  mlp_init, mlp_apply = make_mlp()
+  mlp_init, mlp_apply = make_mlp(
+      num_perceptrons_per_layer=options.num_perceptrons_per_layer,
+      activation_fct_name=options.mlp_activation_fct,
+  )
 
   # Lambda conditioning modules (shared embedding, per-layer CA).
   log_scale = options.lambda_log_scale_input
-  lambda_embed_init, lambda_embed_apply = make_lambda_embedding(attn_dim)
+  lambda_embed_init, lambda_embed_apply = make_lambda_embedding(mlp_dim)
   cross_attn_init, cross_attn_apply = make_cross_attention(
-      attn_dim, mode=options.lambda_conditioning_mode)
+      mlp_dim, mode=options.lambda_conditioning_mode)
 
   def init(key: chex.PRNGKey) -> Tuple[int, networks.ParamTree]:
     """Returns tuple of output dimension from the final layer and parameters."""
@@ -357,10 +365,10 @@ def make_psiformer_layers(
     # Concatenate spin of each electron with other one-electron features.
     feature_dim = one_electron_feature_dim + 1
 
-    # Map to Attention dim.
+    # Map raw features to the token (mlp) dimension.
     key, subkey = jax.random.split(key)
     params['embed'] = network_blocks.init_linear_layer(
-        subkey, in_dim=feature_dim, out_dim=attn_dim, include_bias=False
+        subkey, in_dim=feature_dim, out_dim=mlp_dim, include_bias=False
     )['w']
 
     # Shared lambda embedding.
@@ -374,11 +382,10 @@ def make_psiformer_layers(
     ca_params = []
     for _ in range(num_layers):
       key, attn_key, mlp_key, ca_key = jax.random.split(key, 4)
-      sa_params.append(attention_init(
-          attn_key, q_d=attn_dim, kv_d=attn_dim, output_channels=attn_dim))
+      sa_params.append(attention_init(attn_key))
       if options.use_layer_norm:
-        ln_params.append([layer_norm_init(attn_dim), layer_norm_init(attn_dim)])
-      mlp_params.append(mlp_init(mlp_key, options.mlp_hidden_dims, attn_dim))
+        ln_params.append([layer_norm_init(mlp_dim), layer_norm_init(mlp_dim)])
+      mlp_params.append(mlp_init(mlp_key, mlp_dim))
       ca_params.append(cross_attn_init(ca_key))
 
     params['attention'] = sa_params
@@ -386,7 +393,7 @@ def make_psiformer_layers(
     params['mlp'] = mlp_params
     params['cross_attn'] = ca_params
 
-    return attn_dim, params
+    return mlp_dim, params
 
   def apply(
       params,
@@ -443,8 +450,7 @@ def make_psiformer_layers(
     # ── Per-layer: SA -> CA(lambda) ──
     for layer in range(num_layers):
       # Self-attention + residual.
-      attn_output = attention_apply(
-          params['attention'][layer], x, x, x)
+      attn_output = attention_apply(params['attention'][layer], x)
       x = x + attn_output
       if options.use_layer_norm:
         x = layer_norm_apply(params['ln'][layer][0], x)
@@ -479,9 +485,12 @@ def make_fermi_net(
     # Psiformer-specific kwargs below.
     num_layers: int,
     num_heads: int,
-    heads_dim: int,
-    mlp_hidden_dims: Tuple[int, ...],
+    attn_dim: int,
+    value_dim: int,
+    mlp_dim: int,
+    num_perceptrons_per_layer: int,
     use_layer_norm: bool,
+    mlp_activation_fct: str = 'TANH',
     predict_logits: bool = False,
     boson_head: str = 'product',
     lambda_conditioning_mode: str = 'additive',
@@ -506,9 +515,12 @@ def make_fermi_net(
     rescale_inputs: If true, rescale the inputs so they grow as log(|r|).
     num_layers: Number of stacked self-attention layers.
     num_heads: Number of self-attention heads.
-    heads_dim: Embedding dimension per-head for self-attention.
-    mlp_hidden_dims: Tuple of hidden dimensions of the MLP.
+    attn_dim: Per-head Q/K dimension.
+    value_dim: Per-head V dimension.
+    mlp_dim: Token (embedding) dimension and MLP width.
+    num_perceptrons_per_layer: Number of dense layers in each per-layer MLP.
     use_layer_norm: If true, use layer_norm on both attention and MLP.
+    mlp_activation_fct: One of 'TANH', 'ELU', 'GELU'.
 
   Returns:
     Network object containing init, apply, orbitals, options, where init and
@@ -546,9 +558,12 @@ def make_fermi_net(
       rescale_inputs=rescale_inputs,
       num_layers=num_layers,
       num_heads=num_heads,
-      heads_dim=heads_dim,
-      mlp_hidden_dims=mlp_hidden_dims,
+      attn_dim=attn_dim,
+      value_dim=value_dim,
+      mlp_dim=mlp_dim,
+      num_perceptrons_per_layer=num_perceptrons_per_layer,
       use_layer_norm=use_layer_norm,
+      mlp_activation_fct=mlp_activation_fct,
       predict_logits=predict_logits,
       boson_head=boson_head,
       lambda_conditioning_mode=lambda_conditioning_mode,
