@@ -337,6 +337,12 @@ def default() -> ml_collections.ConfigDict:
           'density': False,  # density matrix
           'density_basis': 'def2-tzvpd',  # basis used for DM calculation
           'dipole': False,  # dipole moment
+          # Condensate fraction n(k=0) via the one-body density matrix.
+          # When True, at each step we compute psi(R')/psi(R) where R' is R
+          # with particle 0 displaced by s ~ Uniform(primitive cell). The
+          # bosonic OBDM gives n(k=0) = N * <psi(R')/psi(R)>. Requires a
+          # periodic lattice (cfg.network.make_feature_layer_kwargs.lattice).
+          'nk0': False,
       },
       'debug': {
           # Check optimizer state, parameters and loss and raise an exception if

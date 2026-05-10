@@ -829,6 +829,54 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
       blocks=cfg.mcmc.blocks * num_states,
       lattice=pbc_lattice_for_mcmc,
   )
+
+  # n(k=0) (condensate-fraction) estimator setup. See cfg.observables.nk0.
+  # Per walker: sample s = lattice @ Uniform([0,1)^d), displace particle 0,
+  # compute psi(R')/psi(R). Then n(k=0) = N * <ratio>, f0 = n(k=0)/N.
+  compute_nk0 = cfg.observables.get('nk0', False)
+  nk0_csv_file = None
+  p_nk0_step = None
+  nk0_n_particles = sum(nspins)
+  if compute_nk0:
+    if pbc_lattice_for_mcmc is None:
+      raise ValueError(
+          'cfg.observables.nk0 requires periodic boundary conditions: '
+          'cfg.network.make_feature_layer_kwargs.lattice is None.')
+    nk0_lattice = jnp.asarray(pbc_lattice_for_mcmc)
+    nk0_ndim = cfg.system.ndim
+
+    def _nk0_one_walker(params, positions, spins, atoms_w, charges_w, lam, key):
+      u = jax.random.uniform(key, shape=(nk0_ndim,))
+      s_disp = nk0_lattice @ u
+      new_positions = positions.at[:nk0_ndim].add(s_disp)
+      sign_old, log_old = signed_network(
+          params, positions, spins, atoms_w, charges_w, lam)
+      sign_new, log_new = signed_network(
+          params, new_positions, spins, atoms_w, charges_w, lam)
+      return sign_old * sign_new * jnp.exp(log_new - log_old)
+
+    def _nk0_one_device(params, data, key):
+      n_local = data.positions.shape[0]
+      keys = jax.random.split(key, n_local)
+      ratios = jax.vmap(
+          _nk0_one_walker, in_axes=(None, 0, 0, 0, 0, 0, 0))(
+              params, data.positions, data.spins, data.atoms, data.charges,
+              data.interaction_strength, keys)
+      mean = jnp.mean(ratios)
+      sq_mean = jnp.mean(ratios ** 2)
+      mean = constants.pmean(mean)
+      sq_mean = constants.pmean(sq_mean)
+      return jnp.stack([mean, sq_mean])
+
+    p_nk0_step = constants.pmap(_nk0_one_device)
+
+    nk0_csv_path = os.path.join(ckpt_save_path, 'nk0_samples.csv')
+    if jax.process_index() == 0:
+      need_header = (not os.path.exists(nk0_csv_path)
+                     or os.path.getsize(nk0_csv_path) == 0)
+      nk0_csv_file = open(nk0_csv_path, 'a', buffering=1)
+      if need_header:
+        nk0_csv_file.write('step,ratio_mean,ratio_sq_mean,n_particles\n')
   # Construct loss and optimizer
   laplacian_method = cfg.optim.get('laplacian', 'default')
   if cfg.system.make_local_energy_fn:
@@ -1135,6 +1183,17 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
           _atomic_save_npy(out, H)
 
 
+      # n(k=0) condensate fraction estimator
+      if compute_nk0:
+        sharded_key, nk0_subkeys = kfac_jax.utils.p_split(sharded_key)
+        nk0_stats = p_nk0_step(params, data, nk0_subkeys)
+        if nk0_csv_file is not None:
+          ratio_mean = float(nk0_stats[0, 0])
+          ratio_sq_mean = float(nk0_stats[0, 1])
+          nk0_csv_file.write(
+              f'{t},{ratio_mean:.10g},{ratio_sq_mean:.10g},'
+              f'{nk0_n_particles}\n')
+
       # due to pmean, loss, and pmove should be the same across
       # devices.
       loss = loss[0]
@@ -1231,3 +1290,5 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         dipole_matrix_file.close()
     if cfg.observables.density:
       density_matrix_file.close()
+    if compute_nk0 and nk0_csv_file is not None:
+      nk0_csv_file.close()
