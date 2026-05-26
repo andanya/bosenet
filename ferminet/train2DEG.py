@@ -551,6 +551,8 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         envelope=envelope,
         feature_layer=feature_layer,
         jastrow=cfg.network.get('jastrow', 'default'),
+        jastrow_kwargs=(
+            dict(cfg.network.get('jastrow_kwargs', None) or {})),
         bias_orbitals=cfg.network.bias_orbitals,
         rescale_inputs=cfg.network.get('rescale_inputs', False),
         complex_output=use_complex,

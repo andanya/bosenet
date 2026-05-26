@@ -302,6 +302,7 @@ class BaseNetworkOptions:
           takes_self=False))
   feature_layer: FeatureLayer = None
   jastrow: jastrows.JastrowType = jastrows.JastrowType.NONE
+  jastrow_kwargs: Mapping[str, Any] = attr.ib(factory=dict)
   complex_output: bool = False
   predict_logits: bool = False
   boson_head: str = 'product'
@@ -1101,7 +1102,8 @@ def make_orbitals(                                    # Important: Here the main
   equivariant_layers_init, equivariant_layers_apply = equivariant_layers
 
   # Optional Jastrow factor.
-  jastrow_init, jastrow_apply = jastrows.get_jastrow(options.jastrow)
+  jastrow_init, jastrow_apply = jastrows.get_jastrow(
+      options.jastrow, **options.jastrow_kwargs)
 
   def init(key: chex.PRNGKey) -> ParamTree:
     """Returns initial random parameters for creating orbitals.
@@ -1282,10 +1284,17 @@ def make_orbitals(                                    # Important: Here the main
     # Optionally apply Jastrow factor for electron cusp conditions.
     # Added pre-determinant for compatibility with pretraining.            # exp in jastrow is added here
     if jastrow_apply is not None:
-      jastrow = jnp.exp(
-          jastrow_apply(r_ee, params['jastrow'], nspins) / sum(nspins)
+      log_jastrow = jastrow_apply(
+          r_ee, params['jastrow'], nspins,
+          ee=ee, interaction_strength=interaction_strength,
       )
-      orbitals = [orbital * jastrow for orbital in orbitals]
+      log_jastrow_per_particle = log_jastrow / sum(nspins)
+      if options.predict_logits:
+        # Orbital entries are log-amplitudes; add Jastrow log contribution.
+        orbitals = [orbital + log_jastrow_per_particle for orbital in orbitals]
+      else:
+        jastrow = jnp.exp(log_jastrow_per_particle)
+        orbitals = [orbital * jastrow for orbital in orbitals]
 
     return orbitals
 

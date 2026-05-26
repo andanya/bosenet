@@ -308,8 +308,13 @@ def default() -> ml_collections.ConfigDict:
           # If true, determinants are dense rather than block-sparse
           'full_det': True,
           # If specified, include a pre-determinant Jastrow factor.
-          # One of 'default' (use network_type default), 'none', or 'simple_ee'.
+          # One of 'default' (use network_type default), 'none', 'simple_ee',
+          # or 'dipole_2d' (Astrakharchik et al. 2D-dipolar bosonic Jastrow).
           'jastrow': 'default',
+          # Extra kwargs for the Jastrow factory (e.g. lattice, rmatch_frac
+          # for the dipole_2d Jastrow). Use placeholder so ml_collections
+          # doesn't lock the type to an empty dict.
+          'jastrow_kwargs': config_dict.placeholder(dict),
           # If true, rescale the inputs so they grow as log(|r|)
           'rescale_inputs': False,
           # String set to module.make_feature_layer, where make_feature_layer is
