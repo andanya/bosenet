@@ -1,0 +1,332 @@
+Filled shells on the triangular lattice
+
+1, 6, 6, 6, 12
+1, 7, 13, 19, 31
+
+19 particles seems especially symmetric
+
+
+
+1, 7, 13, 19, 31, 37, 43, 55, 61,…
+N_s = 3s^2 + 3s + 1
+
+1, 7, 19, 37, 61 particles
+
+===
+Scaling with Gen model
+===
+
+Created dipole-7e-pbc-gen-HEX.py and dipole-37e-pbc-gen-HEX.py — same as the 19e script with N_PARTICLES set to 7 and 37 respectively. Density n = 1/π is preserved, so the hex primitive vector L = sqrt(2·N·π/√3) scales as √N, and the cell area N·π scales linearly with particle count.
+
+Submitted:
+
+7e: job 10303207
+37e: job 10303236
+
+
+===
+pbc-gen-WORKING (10e, TORUS)
+===
+dipole-10e-pbc-gen-WORKING (trained with dipole-10e-pbc-gen-WORKING.py on A100)
+inference has been run (with infer-dipole-10e-pbc-gen-WORKING.py through run-infer-dipole-10e-pbc-gen-WORKING.sh and run-infer-dipole-10e-pbc-gen-WORKING-2.sh)
+
+gen model trained on
+[0.1, 0.5, 5.0, 20.0, 50.0, 80.0]
+inferred for
+(0.1 1.0 0.5 5.0 10.0 20.0 40.0 50.0 65.0 80.0)
+
+individual models trained for rep 0.1, 1.0, 0.5, 5.0, 10.0, 20.0, 40.0, 50.0, 65.0, 80.0
+
+inferred 
+1, 40
+
+to infer
+0.1, 0.5, 5.0, 10.0, 20.0, 50.0, 65.0, 80.0
+
+
+====
+
+Bouchet:
+
+(ferminet-jax)[da753@a1130u05n02.bouchet bosenet]$ sbatch run-psiformer-log-h200.sh python bosef-10e-rep01-CHECK.py 
+Submitted batch job 8275654
+(ferminet-jax)[da753@a1130u05n02.bouchet bosenet]$ git checkout pbc-dipole-dipole
+Switched to branch 'pbc-dipole-dipole'
+Your branch is up to date with 'origin/pbc-dipole-dipole'.
+(ferminet-jax)[da753@a1130u05n02.bouchet bosenet]$ sbatch run-psiformer-log-h200.sh python dipole-19e-rep10-CHECK.py
+Submitted batch job 8275664
+
+---
+
+
+(ferminet-jax)[da753@a1130u05n02.bouchet bosenet]$ sbatch run-psiformer-log-h200.sh python dipole-10e-pbc-gen-HEX.py
+Submitted batch job 7492124
+
+(ferminet-jax)[da753@a1130u05n02.bouchet bosenet]$ sbatch run-psiformer-log-h200.sh python dipole-19e-pbc-gen-HEX.py
+Submitted batch job 7492539
+
+
+(ferminet-jax)[da753@a1132u05n02.bouchet bosenet]$ sbatch run-psiformer-log-h200.sh python bosef-10e-rep01-CHECK.py
+Submitted batch job 7425585
+WORKED!
+
+(ferminet-jax)[da753@a1132u05n02.bouchet bosenet]$ sbatch run-psiformer-log-h200.sh python bosef-10e-rep01-CHECK.py
+Submitted batch job 7404698
+FAILED
+
+(ferminet-jax)[da753@a1132u05n01.bouchet bosenet]$ sbatch run-psiformer-log-h200.sh python bosef-10e-rep01-CHECK.py
+Submitted batch job 7312532
+FAILED
+
+(ferminet-jax)[da753@a1132u05n01.bouchet bosenet]$ sbatch run-psiformer-log-h200.sh python bosef-10e-rep01-CHECK.py
+Submitted batch job 7069606
+FAILED
+
+
+=========
+=========
+=========
+
+Inference Gen New.
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-a100.sh python run-infer-dipole-10e-pbc-gen-WORKING.sh
+Submitted batch job 56270172
+
+
+====
+
+Generative, wider interval
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-a100.sh python dipole-10e-pbc-gen-WORKING.py
+Submitted batch job 56234359
+
+
+===
+
+Inference!
+
+[da753@r904u07n01.grace bosenet]$ sbatch run-psiformer-a100.sh python infer-dipole-10e-rep1-pbc.py
+Submitted batch job 56114307
+[da753@r904u07n01.grace bosenet]$ sbatch run-psiformer-a100.sh python infer-dipole-10e-rep40-pbc.p
+y
+Submitted batch job 56114308
+[da753@r904u07n01.grace bosenet]$ sbatch run-psiformer-a100.sh python infer-dipole-19e-rep40-pbc.p
+y
+Submitted batch job 56114309
+[da753@r904u07n01.grace bosenet]$ sbatch run-psiformer-a100.sh python infer-dipole-19e-rep1-pbc.py
+ 
+Submitted batch job 56114338
+
+
+
+
+(ferminet-jax)[da753@r904u10n02.grace bosenet]$ sbatch run-infer-dipole-10e-pbc-gen-per-lambda-baseline.sh
+Submitted batch job 56131398
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-infer-dipole-10e-gen-exp2.sh
+Submitted batch job 56094005
+-- wrong fodler
+
+
+
+
+===
+
+Disk-sum
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh dipole-10e-rep1-disk-sum.py 
+Submitted batch job 56089083
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh dipole-10e-rep40-disk-sum.py 
+Submitted batch job 56089084
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh dipole-19e-rep1-disk-sum.py 
+Submitted batch job 56089085
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh dipole-19e-rep40-disk-sum.py 
+Submitted batch job 56089087
+
+
+
+===
+Exp for crystal pbc:
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep65-pbc-exp1.py
+Submitted batch job 56072679
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep65-pbc-exp2.py
+Submitted batch job 56075308
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep65-pbc-exp3.py
+Submitted batch job 56072681
+
+
+
+===
+
+Extra strong interaction:
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-rep300-pbc.py 
+Submitted batch job 55992911
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep300-pbc.py 
+Submitted batch job 55992912
+
+
+
+=====
+
+Hexagonal lattice:
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep1-hex-pbc.py 
+Submitted batch job 55992802
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep40-hex-pbc.py 
+Submitted batch job 55992803
+
+
+
+=====
+
+Gen model:
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-pbc-gen-exp2-conservative-lr-wrapping.py
+Submitted batch job 56029043
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-pbc-gen-5000iterations.py
+Submitted batch job 55999843
+
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python  dipole-10e-pbc-gen-exp3-film.py
+Submitted batch job 55999247
+
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-pbc-gen-exp1-logscale.py 
+Submitted batch job 55992799
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-pbc-gen-exp2-conservative-lr.py 
+Submitted batch job 55992800
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-pbc-gen-exp3-film.py 
+Submitted batch job 55992801
+
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-pbc-gen.py
+Submitted batch job 55992798
+-- lambda to all layers
+
+(ferminet-jax)[da753@r904u07n02.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-pbc-gen.py
+Submitted batch job 55985568
+--- worked but loss diverged
+
+=====
+19e
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-rep1-pbc-sum.py
+Submitted batch job 55955000
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-rep40-pbc-sum.py
+Submitted batch job 55954997
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep1-pbc-sum.py
+Submitted batch job 55954994
+
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep40-pbc-sum.py
+Submitted batch job 55954990
+
+-
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep65.py 
+Submitted batch job 55955022
+
+====
+
+failed  (ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-rep1-pbc-sum.py
+        Submitted batch job 55952463
+
+failed  (ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-10e-rep40-pbc-sum.py 
+        Submitted batch job 55952464
+
+failed  (ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep1-pbc-sum.py 
+        Submitted batch job 55952465
+
+failed  (ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep40-pbc-sum.py 
+        Submitted batch job 55952466
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep10.py 
+Submitted batch job 55952167
+(worked)
+
+failed  (ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep65.py 
+        Submitted batch job 55952169
+
+
+(ferminet-jax)[da753@r904u07n04.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep40-pbc.py 
+Submitted batch job 55660423
+(worked)
+
+===
+
+(ferminet-jax)[da753@r904u07n04.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep35-pbc.py 
+Submitted batch job 55660424
+(not saved somehow, check)
+
+(ferminet-jax)[da753@r904u10n02.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep1-pbc.py 
+Submitted batch job 55625752
+rep1 worked! 
+
+((((ferminet-jax)[da753@r904u07n02.grace bosenet]$ sbatch run-psiformer-log-a100.sh python dipole-19e-rep40-pbc.py 
+Submitted batch job 55580392
+rep40 undertrained!)))
+
+
+=====
+Disk
+
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer.sh python bosef-10e-rep40.py
+Submitted batch job 55952141
+
+(ferminet-jax)[da753@r904u10n01.grace bosenet]$ sbatch run-psiformer.sh python bosef-19e-rep40.py 
+Submitted batch job 55952142
+
+
+
+(ferminet-jax)[da753@r904u07n02.grace bosenet]$ sbatch run-psiformer.sh python bosef-10e-rep01-CHECK-old.py 
+Submitted batch job 55807029
+-- just repeating the old one -- worked but spikes
+
+(ferminet-jax)[da753@r904u07n02.grace bosenet]$ sbatch run-psiformer-log-memory.sh python bosef-10e-rep01-CHECK.py 
+Submitted batch job 55807020
+--- not in log space -- worked, but spikes
+
+
+job_55661846 -- loss diverged
+
+
+===
+
+
+A100-80G nodes → 80 GB per GPU
+
+2 nodes with CPU 6342, 4 GPUs/node
+
+1 node with CPU 6326, 4 GPUs/node
+
+A5000 nodes → 24 GB per GPU
+
+11 nodes, 4 GPUs/node
+
+A100-40G nodes → 40 GB per GPU
+
+2 nodes, 4 GPUs/node
+
+V100 nodes → 16 GB per GPU
+
+4 nodes with 4 GPUs/node
+
+2 nodes with 2 GPUs/node
+===
+
+Yes, that's exactly what happens if you set cfg.log.restore_path to your training checkpoint directory. The restore function in checkpoint.py:133 loads the walker positions from the training checkpoint, so your inference run starts from the already-thermalized walkers rather than from scratch.
+
+You'd also want to skip the burn-in phase since the walkers are already thermalized:
+
+
+cfg.optim.optimizer = 'none'
+cfg.optim.iterations = 5000
+cfg.mcmc.burn_in = 0
+cfg.log.restore_path = './dipole-19e-rep1-pbc'
+cfg.log.save_path = './dipole-19e-rep1-pbc'  #

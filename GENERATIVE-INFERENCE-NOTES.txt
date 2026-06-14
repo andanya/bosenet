@@ -1,0 +1,59 @@
+dipole-10e-pbc-gen-exp2-conservative-lr-wrapping
+--- actually worked for generative model
+
+
+
+=====
+
+After training, inference works by setting all walkers to the desired λ value and running with optimizer = 'none'. The existing code in train2DEG.py:1002 already detects this and switches to inference mode.
+
+To run inference at a specific λ:
+
+Create a config like this (e.g. infer-lambda5.py):
+
+
+from pyscf import gto
+from ferminet import base_2DEG_config, train2DEG
+from ferminet.pbc import envelopes
+import numpy as np, os
+
+TORUS_LENGTH = np.sqrt(10 * np.pi)
+N_PARTICLES = 10
+
+mol = gto.Mole()
+mol.build(atom='H 0 0 0', charge=1-N_PARTICLES, spin=N_PARTICLES,
+          basis='sto-3g', unit='bohr')
+
+cfg = base_2DEG_config.default()
+cfg.system.pyscf_mol = mol
+cfg.pretrain.method = None
+
+lattice = TORUS_LENGTH * np.eye(2)
+cfg.network.make_feature_layer_fn = "ferminet.pbc.feature_layer.make_pbc_feature_layer"
+cfg.network.make_feature_layer_kwargs = {"lattice": lattice, "include_r_ae": False}
+cfg.network.make_envelope_fn = "ferminet.envelopes.make_null_envelope"
+cfg.network.make_envelope_kwargs = {}
+cfg.network.full_det = True
+cfg.network.predict_logits = True
+cfg.network.network_type = 'psiformer'
+
+# --- Inference settings ---
+cfg.optim.optimizer = 'none'           # no optimizer → inference mode
+cfg.optim.iterations = 5000            # number of sampling steps
+cfg.interaction_strength = 5.0         # λ to evaluate at (any value)
+# No training set needed for inference:
+# cfg.interaction_strength_training_set = None
+
+# Restore from trained checkpoint
+cfg.log.restore_path = './dipole-10e-pbc-gen'
+cfg.log.save_path = './infer-lambda5'
+
+train2DEG.train(cfg)
+Key points:
+
+cfg.optim.optimizer = 'none' triggers inference mode — it only runs MCMC + energy evaluation, no gradient updates
+cfg.interaction_strength = 5.0 sets all walkers to λ=5.0 (since interaction_strength_training_set is None)
+cfg.log.restore_path points to the trained checkpoint directory
+You can run this for any λ value, including ones not in the training set — the network has learned to condition on λ continuously
+The output logs will contain the sampled energy ⟨H⟩ at that λ
+To sweep multiple λ values, just run separate inference configs (or script a loop changing cfg.interaction_strength).
