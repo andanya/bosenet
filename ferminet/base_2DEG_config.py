@@ -224,6 +224,20 @@ def default() -> ml_collections.ConfigDict:
           # Width of (atom-centred) Gaussian used to generate initial electron
           # configurations.
           'init_width': 1.0,
+          # How to seed the initial MCMC walkers. One of:
+          #   'atom'    - Gaussian blob about each atom (original behaviour).
+          #   'crystal' - seed on a commensurate triangular lattice (+ jitter
+          #               of width init_width) to nucleate the solid phase.
+          #   'gas'     - seed each walker uniformly over the simulation cell
+          #     (or 'uniform')  to favour the gas/superfluid phase.
+          # 'crystal'/'gas' require a periodic lattice
+          # (cfg.network.make_feature_layer_kwargs.lattice).
+          'init_mode': 'atom',
+          # If True, when restoring from a checkpoint (e.g. at inference)
+          # discard the restored walker positions and re-seed them from
+          # scratch using `init_mode`, keeping the restored network params.
+          # Used to force a specific phase (crystal/gas) at inference.
+          'reseed_on_restore': False,
           # Width of Gaussian used for random moves for RMW or step size for
           # HMC.
           'move_width': 0.02,

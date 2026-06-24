@@ -63,6 +63,67 @@ def _assign_spin_configuration(
   return jnp.tile(spins[None], reps=(batch_size, 1))
 
 
+def triangular_lattice_sites(lattice: np.ndarray, n_particles: int) -> np.ndarray:
+  """Returns N triangular-lattice sites commensurate with the simulation cell.
+
+  This is the neural-net analogue of the one-body Gaussian localization term
+  f_1(r_i) = exp(-alpha |r_i - r_i^cr|^2) used by Astrakharchik et al.
+  (PRL 98, 060405 (2007)) to seed the *solid* phase: the lattice sites r_i^cr
+  form a defect-free triangular crystal that tiles the periodic box exactly.
+
+  The cell (columns of `lattice`) is a 60-degree rhombus of side L = sqrt(N) a,
+  where a is the crystal constant. A defect-free triangular lattice with
+  N sites exists iff N = p^2 + p q + q^2 (a Loeschian number); the centred
+  hexagonal "magic numbers" 7, 19, 37, 61, ... all qualify. The N sites, in
+  fractional coordinates of the box, are the distinct residues mod 1 of
+  M^{-1} (i, j) for integers i, j, with M = [[p, -q], [q, p + q]] and
+  det M = N. All fractional coordinates are exact multiples of 1/N.
+
+  Args:
+    lattice: (ndim, ndim) matrix whose columns are the box primitive vectors.
+    n_particles: number of lattice sites to generate.
+
+  Returns:
+    (n_particles, ndim) array of Cartesian site positions inside the cell.
+  """
+  lattice = np.asarray(lattice, dtype=np.float64)
+  ndim = lattice.shape[0]
+  if ndim != 2:
+    raise ValueError('triangular_lattice_sites only supports ndim=2, got '
+                     f'{ndim}.')
+  # Find the most compact (p, q) with p^2 + p q + q^2 == N.
+  best = None
+  for p in range(0, n_particles + 1):
+    for q in range(0, n_particles + 1):
+      if p == 0 and q == 0:
+        continue
+      if p * p + p * q + q * q == n_particles:
+        score = abs(p - q)
+        if best is None or score < best[0]:
+          best = (score, p, q)
+  if best is None:
+    raise ValueError(
+        f'No triangular lattice with {n_particles} sites fits a hexagonal '
+        'cell (N must be a Loeschian number, e.g. 7, 19, 37, 61). Use '
+        "init_mode='gas' or 'atom' for this particle number.")
+  _, p, q = best
+  m_inv = np.array([[p + q, q], [-q, p]], dtype=np.float64) / n_particles
+  seen = set()
+  fracs = []
+  for i in range(n_particles):
+    for j in range(n_particles):
+      f = m_inv @ np.array([i, j], dtype=np.float64)
+      # Fractional coords are exact multiples of 1/N -> robust integer key.
+      key = tuple(int(k) % n_particles for k in np.round(f * n_particles))
+      if key not in seen:
+        seen.add(key)
+        fracs.append(np.array(key, dtype=np.float64) / n_particles)
+  fracs = np.array(fracs)
+  assert fracs.shape[0] == n_particles, (
+      f'expected {n_particles} sites, generated {fracs.shape[0]}')
+  return (lattice @ fracs.T).T
+
+
 def init_electrons(  # pylint: disable=dangerous-default-value
     key,
     molecule: Sequence[system.Atom],
@@ -70,8 +131,10 @@ def init_electrons(  # pylint: disable=dangerous-default-value
     batch_size: int,
     init_width: float,
     core_electrons: Mapping[str, int] = {},
+    init_mode: str = 'atom',
+    lattice: Optional[np.ndarray] = None,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-  """Initializes electron positions around each atom.
+  """Initializes electron positions for the initial MCMC configurations.
 
   Args:
     key: JAX RNG state.
@@ -79,10 +142,22 @@ def init_electrons(  # pylint: disable=dangerous-default-value
     electrons: tuple of number of alpha and beta electrons.
     batch_size: total number of MCMC configurations to generate across all
       devices.
-    init_width: width of (atom-centred) Gaussian used to generate initial
-      electron configurations.
+    init_width: width of the Gaussian used to generate initial electron
+      configurations. For init_mode='crystal' this is the localization width
+      (jitter) about each lattice site.
     core_electrons: mapping of element symbol to number of core electrons
       included in the pseudopotential.
+    init_mode: how to seed walkers. One of:
+      'atom'    - Gaussian blob about each atom (default, original behaviour).
+      'crystal' - all walkers seeded on a commensurate triangular lattice
+                  (+ Gaussian jitter), to nucleate the solid/crystal phase.
+                  This is the analogue of Astrakharchik's one-body Gaussian
+                  localization term about the lattice sites.
+      'gas'/'uniform' - each walker seeded independently uniformly over the
+                  simulation cell, to favour the gas/superfluid phase
+                  (analogue of the translationally invariant f_1 = const).
+    lattice: (ndim, ndim) matrix whose columns are the box primitive vectors.
+      Required for init_mode in {'crystal', 'gas', 'uniform'}.
 
   Returns:
     array of (batch_size, (nalpha+nbeta)*ndim) of initial (random) electron
@@ -91,6 +166,26 @@ def init_electrons(  # pylint: disable=dangerous-default-value
     of spin configurations, where 1 and -1 indicate alpha and beta electrons
     respectively.
   """
+  nelec = sum(electrons)
+  if init_mode in ('crystal', 'gas', 'uniform'):
+    if lattice is None:
+      raise ValueError(f"init_mode={init_mode!r} requires a `lattice`.")
+    lattice_j = jnp.asarray(np.asarray(lattice), dtype=jnp.float32)
+    ndim = lattice_j.shape[0]
+    key, subkey = jax.random.split(key)
+    if init_mode == 'crystal':
+      sites = triangular_lattice_sites(np.asarray(lattice), nelec)  # (nelec, ndim)
+      base = jnp.asarray(sites.reshape(-1), dtype=jnp.float32)  # [x0,y0,x1,y1,...]
+      electron_positions = base[None, :] + (
+          jax.random.normal(subkey, shape=(batch_size, base.size)) * init_width)
+    else:  # 'gas' / 'uniform'
+      frac = jax.random.uniform(subkey, shape=(batch_size, nelec, ndim))
+      cart = jnp.einsum('ij,bej->bei', lattice_j, frac)
+      electron_positions = jnp.reshape(cart, (batch_size, nelec * ndim))
+    electron_spins = _assign_spin_configuration(
+        electrons[0], electrons[1], batch_size)
+    return electron_positions, electron_spins
+
   total_electrons = sum(atom.charge - core_electrons.get(atom.symbol, 0)
                         for atom in molecule)
   if total_electrons != sum(electrons):
@@ -669,12 +764,58 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         positions=data.positions, spins=data.spins,
         atoms=data.atoms, charges=data.charges,
         interaction_strength=batch_interaction_strength)
+    # Optionally discard the restored walkers and re-seed them from scratch
+    # (keeping the restored network params). Used to force a specific phase
+    # (crystal/gas) at inference by seeding walkers in the right basin.
+    if cfg.mcmc.get('reseed_on_restore', False):
+      reseed_mode = cfg.mcmc.get('init_mode', 'atom')
+      lattice_for_init = None
+      if reseed_mode != 'atom':
+        try:
+          lattice_for_init = np.asarray(
+              cfg.network.make_feature_layer_kwargs['lattice'])
+        except (KeyError, TypeError, AttributeError):
+          raise ValueError(
+              f"init_mode={reseed_mode!r} requires a lattice in "
+              'cfg.network.make_feature_layer_kwargs["lattice"].')
+      key, rs_key = jax.random.split(key)
+      rs_key = jax.random.fold_in(rs_key, jax.process_index())
+      rs_pos, rs_spins = init_electrons(
+          rs_key,
+          cfg.system.molecule,
+          cfg.system.electrons,
+          batch_size=total_host_batch_size,
+          init_width=cfg.mcmc.init_width,
+          core_electrons=core_electrons,
+          init_mode=reseed_mode,
+          lattice=lattice_for_init,
+      )
+      rs_pos = kfac_jax.utils.broadcast_all_local_devices(
+          jnp.reshape(rs_pos, data_shape + (-1,)))
+      rs_spins = kfac_jax.utils.broadcast_all_local_devices(
+          jnp.reshape(rs_spins, data_shape + (-1,)))
+      logging.info('Re-seeding %d walkers on restore with init_mode=%r',
+                   total_host_batch_size, reseed_mode)
+      data = networks.FermiNetData(
+          positions=rs_pos, spins=rs_spins,
+          atoms=data.atoms, charges=data.charges,
+          interaction_strength=batch_interaction_strength)
   else:
     logging.info('No checkpoint found. Training new model.')
     key, subkey = jax.random.split(key)
     # make sure data on each host is initialized differently
     subkey = jax.random.fold_in(subkey, jax.process_index())
     # create electron state (position and spin)
+    init_mode = cfg.mcmc.get('init_mode', 'atom')
+    lattice_for_init = None
+    if init_mode != 'atom':
+      try:
+        lattice_for_init = np.asarray(
+            cfg.network.make_feature_layer_kwargs['lattice'])
+      except (KeyError, TypeError, AttributeError):
+        raise ValueError(
+            f"init_mode={init_mode!r} requires a lattice in "
+            'cfg.network.make_feature_layer_kwargs["lattice"].')
     pos, spins = init_electrons(
         subkey,
         cfg.system.molecule,
@@ -682,6 +823,8 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         batch_size=total_host_batch_size,
         init_width=cfg.mcmc.init_width,
         core_electrons=core_electrons,
+        init_mode=init_mode,
+        lattice=lattice_for_init,
     )
     # For excited states, each device has a batch of walkers, where each walker
     # is nstates * nelectrons. The vmap over nstates is handled in the function
