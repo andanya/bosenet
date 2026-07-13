@@ -14,15 +14,12 @@ module load cuDNN
 
 cd /home/da753/bosenet
 
-# Background GPU heartbeat — keeps nvidia-smi util > 0% during XLA's slow
-# autotune phase so the YCRC watchdog doesn't kill us mid-autotune
-# (cf. jobs 10301620/10301846, Apr 30 – May 1 2026).
-python /home/da753/bosenet/gpu-heartbeat.py 2>/dev/null &
-HEARTBEAT_PID=$!
+# Skip XLA gemm-fusion autotune; the single-threaded compile takes >1h and
+# trips the YCRC GPU watchdog (jobs 10301620/10301846, Apr 30 – May 1 2026).
+export XLA_FLAGS="--xla_gpu_autotune_level=0"
 
 # Run the command passed as argument
 $@
 EXIT=$?
 
-kill $HEARTBEAT_PID 2>/dev/null
 exit $EXIT
