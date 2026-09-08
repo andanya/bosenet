@@ -177,13 +177,38 @@ def _per_lambda_baseline(local_energies: jnp.ndarray,
   return group_sums / group_sizes
 
 
+def _per_lambda_clip(local_energies: jnp.ndarray,
+                     interaction_strengths: jnp.ndarray,
+                     clip_scale: float) -> jnp.ndarray:
+  """Clips each walker's E_L to its own λ-group window [c - s*tv, c + s*tv].
+
+  The clip center c is the group mean and tv the group mean-absolute-deviation
+  from that mean, both computed over walkers sharing the walker's λ. In
+  multi-λ training a *global* window is set by the (huge) inter-group energy
+  spread, so it never clips genuine within-group outliers; clipping per group
+  restores real outlier control. For a single λ this reduces to the standard
+  (mean-centered) clip. Operates per device, matching `_per_lambda_baseline`.
+  """
+  same_lambda = jnp.abs(interaction_strengths[:, None]
+                        - interaction_strengths[None, :]) < 1e-6
+  mask = same_lambda.astype(local_energies.dtype)
+  group_sizes = jnp.sum(mask, axis=1)
+  center = jnp.dot(mask, local_energies) / group_sizes            # per group mean
+  abs_dev = jnp.abs(local_energies - center)
+  tv = jnp.dot(mask, abs_dev) / group_sizes                       # per group MAD
+  return jnp.clip(local_energies,
+                  center - clip_scale * tv,
+                  center + clip_scale * tv)
+
+
 def make_loss(network: networks.LogFermiNetLike,
               local_energy: hamiltonian.LocalEnergy,
               clip_local_energy: float = 0.0,
               clip_from_median: bool = True,
               center_at_clipped_energy: bool = True,
               complex_output: bool = False,
-              max_vmap_batch_size: int = 0) -> LossFn:
+              max_vmap_batch_size: int = 0,
+              per_lambda_clip: bool = False) -> LossFn:
   """Creates the loss function, including custom gradients.
 
   Args:
@@ -275,7 +300,17 @@ def make_loss(network: networks.LogFermiNetLike,
 
     data = primals[2]
 
-    if clip_local_energy > 0.0:
+    if clip_local_energy > 0.0 and per_lambda_clip and not complex_output:
+      # Clip within each λ group (see _per_lambda_clip), then center each group
+      # at its own clipped mean so the per-group gradient stays unbiased. This
+      # is the multi-λ-correct counterpart of the global clip below.
+      clipped_el = _per_lambda_clip(
+          aux_data.local_energy, data.interaction_strength, clip_local_energy)
+      per_lambda_mean = _per_lambda_baseline(
+          clipped_el, data.interaction_strength)
+      aux_data.clipped_energy = constants.pmean(jnp.mean(clipped_el))
+      diff = clipped_el - per_lambda_mean
+    elif clip_local_energy > 0.0:
       # Clip outliers using global statistics (appropriate for outlier removal)
       aux_data.clipped_energy, diff = clip_local_values(
           aux_data.local_energy,

@@ -22,6 +22,7 @@ from ferminet import envelopes
 from ferminet import jastrows
 from ferminet import network_blocks
 from ferminet import networks
+from ferminet import smooth_jastrow
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -486,6 +487,9 @@ def make_fermi_net(
     boson_head: str = 'product',
     lambda_conditioning_mode: str = 'additive',
     lambda_log_scale_input: bool = False,
+    smooth_periodic_jastrow: bool = False,
+    smooth_periodic_jastrow_lattice: Optional[np.ndarray] = None,
+    smooth_periodic_jastrow_rmatch_frac: float = 1.0,
 ) -> networks.Network:
   """Psiformer with stacked Self Attention layers and lambda conditioning.
 
@@ -555,6 +559,21 @@ def make_fermi_net(
       lambda_log_scale_input=lambda_log_scale_input,
   )  # pytype: disable=wrong-keyword-args
 
+  # Optional fixed smooth-periodic two-body Jastrow prefactor (FIX A). Built
+  # once here and captured by network_apply; adds log f_2 to log|psi| with each
+  # walker's own lambda. Non-trainable, strictly positive (sign unchanged).
+  if smooth_periodic_jastrow:
+    if smooth_periodic_jastrow_lattice is None:
+      raise ValueError(
+          'smooth_periodic_jastrow=True requires '
+          'smooth_periodic_jastrow_lattice (the PBC lattice).')
+    smooth_periodic_logJ = smooth_jastrow.make_smooth_periodic_log_jastrow(
+        lattice=smooth_periodic_jastrow_lattice,
+        ndim=ndim,
+        rmatch_frac=smooth_periodic_jastrow_rmatch_frac)
+  else:
+    smooth_periodic_logJ = None
+
   psiformer_layers = make_psiformer_layers(nspins, charges.shape[0], options)
 
   orbitals_init, orbitals_apply = networks.make_orbitals(
@@ -597,6 +616,12 @@ def make_fermi_net(
     else:
       result = network_blocks.logproduct_matmul(
           orbitals, predict_logits=options.predict_logits)
+
+    # Fixed smooth-periodic two-body Jastrow: log psi += sum_{i<j} log f_2.
+    # Strictly positive, so only the log-magnitude changes, not the sign/phase.
+    if smooth_periodic_logJ is not None:
+      sign, logabs = result
+      result = (sign, logabs + smooth_periodic_logJ(pos, interaction_strength))
 
     return result
 

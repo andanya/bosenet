@@ -560,6 +560,12 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
             'lambda_conditioning', {}).get('mode', 'additive'),
         lambda_log_scale_input=cfg.network.get(
             'lambda_conditioning', {}).get('log_scale_input', False),
+        smooth_periodic_jastrow=cfg.network.get(
+            'smooth_periodic_jastrow', False),
+        smooth_periodic_jastrow_lattice=cfg.network.get(
+            'make_feature_layer_kwargs', {}).get('lattice', None),
+        smooth_periodic_jastrow_rmatch_frac=cfg.network.get(
+            'smooth_periodic_jastrow_rmatch_frac', 1.0),
         **cfg.network.psiformer,
     )
   key, subkey = jax.random.split(key)
@@ -877,6 +883,42 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
       nk0_csv_file = open(nk0_csv_path, 'a', buffering=1)
       if need_header:
         nk0_csv_file.write('step,ratio_mean,ratio_sq_mean,n_particles\n')
+  # Tripwire diagnostics setup. Detects the "contact pocket" failure mode
+  # (walkers drifting to near-coincident configurations, where a singular pair
+  # potential makes E_L blow up) and undertrained lambda groups, both of which
+  # are invisible in the aggregate training energy. Host-side, every
+  # tripwire_frequency steps; negligible overhead.
+  tripwires_on = bool(cfg.log.get('tripwires', False))
+  tripwire_frequency = int(cfg.log.get('tripwire_frequency', 100))
+  tripwire_csv_file = None
+  tripwire_lattice = pbc_lattice_for_mcmc
+  tripwire_ndim = cfg.system.ndim
+  if tripwires_on and jax.process_index() == 0:
+    tripwire_csv_path = os.path.join(ckpt_save_path, 'tripwires.csv')
+    need_header = (not os.path.exists(tripwire_csv_path)
+                   or os.path.getsize(tripwire_csv_path) == 0)
+    tripwire_csv_file = open(tripwire_csv_path, 'a', buffering=1)
+    if need_header:
+      tripwire_csv_file.write(
+          'step,rmin,frac_close,max_abs_el,per_lambda_energies\n')
+
+  def _min_pair_distance(positions_host: np.ndarray) -> tuple:
+    """(rmin, frac of walkers with a pair closer than 0.5) via min-image."""
+    n_coords = positions_host.shape[-1]
+    nelec = n_coords // tripwire_ndim
+    r = positions_host.reshape(-1, nelec, tripwire_ndim)
+    d = r[:, :, None, :] - r[:, None, :, :]  # (W, N, N, ndim)
+    if tripwire_lattice is not None:
+      lat = np.asarray(tripwire_lattice)
+      inv = np.linalg.inv(lat)
+      frac = np.einsum('ij,wabj->wabi', inv, d)
+      d = np.einsum('ij,wabj->wabi', lat, frac - np.round(frac))
+    dist = np.linalg.norm(d, axis=-1)  # (W, N, N)
+    iu = np.triu_indices(nelec, 1)
+    pair = dist[:, iu[0], iu[1]]  # (W, P)
+    per_walker_min = pair.min(axis=1)
+    return float(per_walker_min.min()), float((per_walker_min < 0.5).mean())
+
   # Construct loss and optimizer
   laplacian_method = cfg.optim.get('laplacian', 'default')
   if cfg.system.make_local_energy_fn:
@@ -901,6 +943,30 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
     pp_symbols = cfg.system.get('pp', {'symbols': None}).get('symbols')
     # Extract lattice for periodic boundary conditions if present
     pbc_lattice = cfg.network.get('make_feature_layer_kwargs', {}).get('lattice', None)
+    # Optional long-range tail correction for the dipole pair interaction.
+    interaction_tail_correction = cfg.get('interaction_tail_correction', False)
+    interaction_cutoff_radius = cfg.get('interaction_cutoff_radius', None)
+    interaction_tail_g2_r = None
+    interaction_tail_g2_values = None
+    if interaction_tail_correction:
+      g2_path = cfg.get('interaction_tail_g2_path', None)
+      if g2_path:
+        g2_data = np.load(g2_path)
+        interaction_tail_g2_r = g2_data['r']
+        interaction_tail_g2_values = g2_data['g2']
+        logging.info('Loaded tabulated g2(r) for tail correction from %s',
+                     g2_path)
+      logging.info(
+          'Interaction tail correction ON: cutoff R_c=%s, g2=%s',
+          interaction_cutoff_radius,
+          'tabulated' if interaction_tail_g2_r is not None else 'uniform (=1)')
+    if cfg.get('interaction_ewald', False):
+      logging.info(
+          'Interaction Ewald summation ON (exact periodic 1/(r+a)^3): '
+          'eta_scale=%s real_shells=%s recip_shells=%s',
+          cfg.get('interaction_ewald_eta_scale', 1.0),
+          cfg.get('interaction_ewald_real_shells', 3),
+          cfg.get('interaction_ewald_recip_shells', 8))
     local_energy_fn = hamiltonian.local_energy(   # HAMILTONIAN LOCAL ENERGY
         f=signed_network,
         charges=charges,
@@ -917,6 +983,15 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         interaction_truncation_limit=cfg.interaction_truncation_limit,
         barrier_sharpness=cfg.barrier_sharpness,
         lattice=pbc_lattice,
+        interaction_cutoff_radius=interaction_cutoff_radius,
+        interaction_tail_correction=interaction_tail_correction,
+        interaction_tail_g2_r=interaction_tail_g2_r,
+        interaction_tail_g2_values=interaction_tail_g2_values,
+        interaction_ewald=cfg.get('interaction_ewald', False),
+        interaction_ewald_eta=cfg.get('interaction_ewald_eta', None),
+        interaction_ewald_eta_scale=cfg.get('interaction_ewald_eta_scale', 1.0),
+        interaction_ewald_real_shells=cfg.get('interaction_ewald_real_shells', 3),
+        interaction_ewald_recip_shells=cfg.get('interaction_ewald_recip_shells', 8),
         )
 
   if cfg.optim.get('spin_energy', 0.0) > 0.0:            # + S^2 term if needed
@@ -950,6 +1025,7 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
         center_at_clipped_energy=cfg.optim.center_at_clip,
         complex_output=use_complex,
         max_vmap_batch_size=cfg.optim.get('max_vmap_batch_size', 0),
+        per_lambda_clip=cfg.optim.get('per_lambda_clip', False),
     )
   elif cfg.optim.objective == 'wqmc':
     evaluate_loss = qmc_loss_functions.make_wqmc_loss(
@@ -1194,6 +1270,34 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
               f'{t},{ratio_mean:.10g},{ratio_sq_mean:.10g},'
               f'{nk0_n_particles}\n')
 
+      # Tripwire diagnostics: contact-pocket / undertrained-group detection.
+      if tripwires_on and (t % tripwire_frequency == 0):
+        try:
+          el_host = np.asarray(jax.device_get(aux_data.local_energy)).reshape(-1)
+          lam_host = np.asarray(
+              jax.device_get(data.interaction_strength)).reshape(-1)
+          max_abs_el = float(np.max(np.abs(el_host))) if el_host.size else float('nan')
+          pos_host = _unshard_positions_to_host(data.positions)
+          rmin, frac_close = _min_pair_distance(pos_host)
+          uniq = np.unique(lam_host)
+          per_lam = {float(u): float(np.mean(el_host[lam_host == u]))
+                     for u in uniq}
+          # Warn on walkers approaching contact at non-trivial coupling.
+          hot_lambda = float(uniq.max()) if uniq.size else 0.0
+          if rmin < 0.5 and hot_lambda > 5.0:
+            logging.warning(
+                'TRIPWIRE step %d: rmin=%.3f (%.1f%% walkers < 0.5) at '
+                'lambda up to %.1f; max|E_L|=%.3g. Possible contact pocket.',
+                t, rmin, 100 * frac_close, hot_lambda, max_abs_el)
+          if tripwire_csv_file is not None:
+            per_lam_str = ';'.join(
+                f'{k:g}:{v:.6g}' for k, v in sorted(per_lam.items()))
+            tripwire_csv_file.write(
+                f'{t},{rmin:.6g},{frac_close:.6g},{max_abs_el:.6g},'
+                f'"{per_lam_str}"\n')
+        except Exception as e:  # never let diagnostics kill a training run
+          logging.warning('Tripwire computation failed at step %d: %s', t, e)
+
       # due to pmean, loss, and pmove should be the same across
       # devices.
       loss = loss[0]
@@ -1292,3 +1396,5 @@ def train(cfg: ml_collections.ConfigDict, writer_manager=None):
       density_matrix_file.close()
     if compute_nk0 and nk0_csv_file is not None:
       nk0_csv_file.close()
+    if tripwire_csv_file is not None:
+      tripwire_csv_file.close()

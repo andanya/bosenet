@@ -60,6 +60,28 @@ def default() -> ml_collections.ConfigDict:
       'interaction_strength_training_set': None,  # list of λ values for multi-λ training
       'interaction_small_length_cutoff': 0.1,
       'interaction_truncation_limit': 5,
+      # Long-range tail correction for the 1/(r+r0)^3 pair interaction.
+      # When `interaction_tail_correction` is False (default) the explicit pair
+      # sum runs exactly as before. When True, the explicit sum is restricted to
+      # a sphere of radius `interaction_cutoff_radius` and the isotropic large-r
+      # remainder (weighted by the pair-correlation function g2(r), defaulting to
+      # a uniform g2=1) is added as a constant. An optional tabulated g2 can be
+      # supplied as an .npz path with arrays `r` and `g2`.
+      'interaction_tail_correction': False,
+      'interaction_cutoff_radius': None,
+      'interaction_tail_g2_path': None,
+      # Exact 2D Ewald summation for the 1/(r+a)^3 interaction. When
+      # `interaction_ewald` is False (default) nothing changes. When True, the
+      # electron-electron energy is evaluated by Ewald summation (exact for the
+      # periodic cell, no cutoff/tail error, valid for the rhombic HEX cell) and
+      # the minimum-image pair sum / tail correction are bypassed. Mutually
+      # exclusive with `interaction_tail_correction`. The remaining keys are
+      # convergence controls; the energy is independent of `interaction_ewald_eta`.
+      'interaction_ewald': False,
+      'interaction_ewald_eta': None,
+      'interaction_ewald_eta_scale': 1.0,
+      'interaction_ewald_real_shells': 3,
+      'interaction_ewald_recip_shells': 8,
       'barrier_sharpness': 1.,
       # Lattice type for periodic boundary conditions. Used by helper
       # `make_lattice` to construct the lattice matrix passed to the PBC
@@ -94,6 +116,13 @@ def default() -> ml_collections.ConfigDict:
           # If greater than zero, scale (at which to clip local energy) in units
           # of the mean deviation from the mean.
           'clip_local_energy': 5.0,
+          # If true, clip local energies *within each lambda group* (center and
+          # mean-abs-deviation computed per lambda) instead of over the whole
+          # mixed-lambda batch. In multi-lambda ("gen") training the inter-group
+          # energy spread otherwise dominates the global clip window, disabling
+          # outlier control within each group. No effect for single-lambda runs.
+          # Requires clip_local_energy > 0.
+          'per_lambda_clip': False,
           # If true, center the clipping window around the median rather than
           # the mean. More "correct" for removing outliers, but also potentially
           # slow, especially with multihost training.
@@ -146,6 +175,13 @@ def default() -> ml_collections.ConfigDict:
       },
       'log': {
           'stats_frequency': 1,  # iterations between logging of stats
+          # Tripwire diagnostics: when True, every `tripwire_frequency`
+          # iterations write per-walker min pair distance, max |E_L|, and
+          # per-lambda mean energies to tripwires.csv, and emit a warning when
+          # walkers approach contact (rmin < 0.5) at lambda > 5. Cheap early
+          # detection of the "contact pocket" failure mode. Off by default.
+          'tripwires': False,
+          'tripwire_frequency': 100,
           'save_frequency': 10.0,  # minutes between saving network params
           # Path to save/restore network to/from. If falsy,
           # creates a timestamped directory in the working directory.
@@ -331,6 +367,18 @@ def default() -> ml_collections.ConfigDict:
           # Boson head type: 'product' computes product of orbitals,
           # 'sum' computes sum of orbitals.
           'boson_head': 'product',
+          # FIX A: fixed (non-trainable) smooth-periodic two-body Jastrow
+          # prefactor log f_2 = log K_0(2 sqrt(lambda / rho(r~))), r~ the smooth
+          # periodic distance. Imposes the exact 2D-dipole short-range cusp so
+          # E_L is finite at contact; smooth everywhere (no min-image / matching
+          # seam), so the variational bound is respected. Uses the PBC lattice
+          # from make_feature_layer_kwargs['lattice']. Off by default (leaves
+          # every existing run unchanged).
+          'smooth_periodic_jastrow': False,
+          # Saturation length of the Jastrow as a fraction of the shortest
+          # lattice vector: rho(r) = R0 tanh(r/R0), R0 = frac * L_min. >= 1 is a
+          # gentle cap that preserves short-range asymptotics.
+          'smooth_periodic_jastrow_rmatch_frac': 1.0,
       },
       'observables': {
           's2': False,  # spin magnitude
