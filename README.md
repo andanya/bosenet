@@ -10,17 +10,13 @@ Variational neural quantum states (NQS) for variational Monte Carlo simulations 
 
 The code is based on the FermiNet and Psiformer repos by Google DeepMind ([https://github.com/google-deepmind/ferminet](https://github.com/google-deepmind/ferminet)) with a different architecture that accounts for bosonic quantum statistics. 
 
+![Main plot panels](main-plot-panels.png)
+
 ## Requirements
 
 See FermiNet requirements
 
 ## Usage
-
-Branches:
-- `main` disk geometry, short-range interaction
-- `pbc` periodic boundary conditions on a torus, short-range interaction
-- `pbc-dipole-dipole` periodic boundary conditions on a torus, dipole-dipole interaction (1/r^3) featuring a phase transition.
-
 
 See an example of the optimization script in https://github.com/andanya/bosenet/bosef-10e-rep01.py. 
 The training curves are saved to `train_stats.csv`
